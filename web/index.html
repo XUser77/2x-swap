@@ -183,7 +183,7 @@
 
     <div class="card">
       <h1>Swap ETH → USDC</h1>
-      <p>Uses Uniswap V2 on your local Hardhat fork (chainId 31337). Connect Metamask to http://127.0.0.1:8545.</p>
+      <p>Swap via Uniswap V2 on your local Hardhat fork (chainId 31337). Connect Metamask to http://127.0.0.1:8545.</p>
 
       <div style="margin-top:16px;">
         <label for="amount">Amount ETH to swap</label>
@@ -199,6 +199,36 @@
       </div>
 
       <div class="status" id="status"><span>Idle</span></div>
+
+      <hr style="border:1px solid var(--border); border-radius: 999px; margin:20px 0;">
+
+      <h2 style="margin:0 0 8px;font-size:18px;">Swap USDC → ETH</h2>
+
+      <div class="panel" style="margin-bottom:14px;">
+        <div class="panel-header">USDC Approval to Router</div>
+        <div class="balance-row" style="margin-top:0;">
+          <div class="balance-label">Current</div>
+          <div class="balance-value" id="routerApprovalVal">–</div>
+        </div>
+        <div style="margin-top:8px;" class="row">
+          <button id="routerApproveBtn" disabled>Approve Router</button>
+        </div>
+      </div>
+
+      <div style="margin-top:12px;">
+        <label for="amountUsdc">Amount USDC to swap</label>
+        <input id="amountUsdc" type="number" step="0.01" min="0" placeholder="100" />
+      </div>
+
+      <div style="margin-top:10px;">
+        <span class="muted">Est. ETH (1% slippage): <span id="quoteUsdc">–</span></span>
+      </div>
+
+      <div style="margin-top:16px;" class="row">
+        <button id="swapUsdcBtn" disabled>Swap to ETH</button>
+      </div>
+
+      <div class="status" id="statusUsdc"><span>Idle</span></div>
     </div>
 
     <div class="card">

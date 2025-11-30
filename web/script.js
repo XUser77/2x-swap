@@ -6,7 +6,8 @@ const USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
 
 const routerAbi = [
   "function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory amounts)",
-  "function swapExactETHForTokens(uint amountOutMin, address[] calldata path, address to, uint deadline) external payable returns (uint[] memory amounts)"
+  "function swapExactETHForTokens(uint amountOutMin, address[] calldata path, address to, uint deadline) external payable returns (uint[] memory amounts)",
+  "function swapExactTokensForETH(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)"
 ];
 const erc20Abi = [
   "function balanceOf(address) view returns (uint256)",
@@ -29,7 +30,8 @@ const state = {
   lpDecimals: 18,
   poolAddress: null,
   pool: null,
-  allowance: 0n
+  allowance: 0n,
+  routerAllowance: 0n
 };
 
 const $ = (id) => document.getElementById(id);
@@ -42,8 +44,16 @@ const setPoolStatus = (msg) => {
   const el = $("poolStatus");
   if (el) el.innerHTML = `<span>${msg}</span>`;
 };
+const setSwapUsdcStatus = (msg) => {
+  const el = $("statusUsdc");
+  if (el) el.innerHTML = `<span>${msg}</span>`;
+};
 const setApprovalText = (txt) => {
   const el = $("approvalVal");
+  if (el) el.textContent = txt;
+};
+const setRouterApprovalText = (txt) => {
+  const el = $("routerApprovalVal");
   if (el) el.textContent = txt;
 };
 const setLoading = (msg) => {
@@ -61,6 +71,14 @@ const setSwapDisabled = (disabled) => {
   const btn = $("swapBtn");
   if (btn) btn.disabled = disabled;
 };
+const setSwapUsdcDisabled = (disabled) => {
+  const btn = $("swapUsdcBtn");
+  if (btn) btn.disabled = disabled;
+};
+const setRouterApproveDisabled = (disabled) => {
+  const btn = $("routerApproveBtn");
+  if (btn) btn.disabled = disabled;
+};
 const setPoolDisabled = (depositDisabled, withdrawDisabled) => {
   const d = $("depositBtn");
   const w = $("withdrawBtn");
@@ -75,6 +93,10 @@ const setApprovalDisabled = (incDisabled, decDisabled) => {
 };
 const isAmountValid = () => {
   const val = $("amount").value;
+  return val && !isNaN(val) && Number(val) > 0;
+};
+const isAmountUsdcValid = () => {
+  const val = $("amountUsdc").value;
   return val && !isNaN(val) && Number(val) > 0;
 };
 const isDepositValid = () => {
@@ -130,6 +152,7 @@ async function connect() {
   setConnStatus("Connected to Hardhat fork (chainId 31337)");
   setPoolStatus("Connected");
   updateSwapState();
+  updateSwapUsdcState();
   updatePoolState();
 }
 
@@ -155,18 +178,28 @@ async function refreshBalances() {
 }
 
 async function refreshAllowance() {
-  if (!state.signer || !state.poolAddress) {
+  if (!state.signer) {
     setApprovalText("–");
+    setRouterApprovalText("–");
     return;
   }
   try {
-    const allowance = await state.usdc.allowance(state.addr, state.poolAddress);
-    state.allowance = allowance;
-    const display = Number(ethers.formatUnits(allowance, state.usdcDecimals));
-    setApprovalText(display.toFixed(2));
+    if (state.poolAddress) {
+      const allowance = await state.usdc.allowance(state.addr, state.poolAddress);
+      state.allowance = allowance;
+      const display = Number(ethers.formatUnits(allowance, state.usdcDecimals));
+      setApprovalText(display.toFixed(2));
+    } else {
+      setApprovalText("–");
+    }
+    const routerAllowance = await state.usdc.allowance(state.addr, UNISWAP_V2_ROUTER);
+    state.routerAllowance = routerAllowance;
+    const routerDisplay = Number(ethers.formatUnits(routerAllowance, state.usdcDecimals));
+    setRouterApprovalText(routerDisplay.toFixed(2));
   } catch (e) {
     console.error(e);
     setApprovalText("?");
+    setRouterApprovalText("?");
   }
 }
 
@@ -192,6 +225,26 @@ async function quote() {
     $("quote").textContent = "Error";
   }
   updateSwapState();
+}
+
+async function quoteUsdc() {
+  const val = $("amountUsdc").value;
+  if (!val || isNaN(val) || Number(val) <= 0) {
+    $("quoteUsdc").textContent = "–";
+    updateSwapUsdcState();
+    return;
+  }
+  if (!state.router) return;
+  try {
+    const amountIn = ethers.parseUnits(val.toString(), state.usdcDecimals);
+    const amounts = await state.router.getAmountsOut(amountIn, [USDC, WETH]);
+    const out = amounts[1];
+    $("quoteUsdc").textContent = ethers.formatEther(out) + " ETH";
+  } catch (err) {
+    console.error(err);
+    $("quoteUsdc").textContent = "Error";
+  }
+  updateSwapUsdcState();
 }
 
 async function swap() {
@@ -232,13 +285,71 @@ async function swap() {
   }
 }
 
+async function swapUsdc() {
+  if (!state.signer) {
+    await connect();
+    if (!state.signer) return;
+  }
+  const val = $("amountUsdc").value;
+  if (!val || isNaN(val) || Number(val) <= 0) {
+    return setSwapUsdcStatus("Enter an amount");
+  }
+  let amountIn;
+  try {
+    amountIn = ethers.parseUnits(val.toString(), state.usdcDecimals);
+  } catch (e) {
+    console.error(e);
+    return setSwapUsdcStatus("Invalid amount");
+  }
+  let minOut;
+  try {
+    const amounts = await state.router.getAmountsOut(amountIn, [USDC, WETH]);
+    minOut = amounts[1] * 99n / 100n;
+  } catch (err) {
+    console.error(err);
+    return setSwapUsdcStatus("Quote failed");
+  }
+  if (state.routerAllowance < amountIn) {
+    return setSwapUsdcStatus("Allowance too low. Approve router first.");
+  }
+  try {
+    setSwapUsdcStatus("Sending swap…");
+    const tx = await state.router.swapExactTokensForETH(
+      amountIn,
+      minOut,
+      [USDC, WETH],
+      state.addr,
+      Math.floor(Date.now() / 1000) + 60 * 10,
+      { gasLimit: 700000n }
+    );
+    setSwapUsdcStatus("Pending… " + tx.hash);
+    await tx.wait();
+    setSwapUsdcStatus("Swap confirmed");
+    await refreshBalances();
+    await quoteUsdc();
+    await refreshAllowance();
+    updateSwapUsdcState();
+  } catch (err) {
+    console.error(err);
+    setSwapUsdcStatus(err.message || "Swap failed");
+  }
+}
+
 $("connectBtn").onclick = connect;
 $("swapBtn").onclick = swap;
 $("amount").oninput = quote;
+$("amountUsdc").oninput = quoteUsdc;
+$("swapUsdcBtn").onclick = swapUsdc;
 
 function updateSwapState() {
   const connected = Boolean(state.signer);
   setSwapDisabled(!(connected && isAmountValid()));
+}
+
+function updateSwapUsdcState() {
+  const connected = Boolean(state.signer);
+  setSwapUsdcDisabled(!(connected && isAmountUsdcValid()));
+  setRouterApproveDisabled(!(connected && state.routerAllowance === 0n));
 }
 
 function updatePoolState() {
@@ -284,6 +395,9 @@ $("withdrawAmount").oninput = () => {
 };
 $("approvalAmount").oninput = () => {
   updatePoolState();
+};
+$("amountUsdc").oninput = () => {
+  updateSwapUsdcState();
 };
 
 async function depositPool() {
@@ -391,6 +505,7 @@ async function changeApproval(direction) {
     setPoolStatus("Approval updated");
     await refreshAllowance();
     updatePoolState();
+    updateSwapUsdcState();
   } catch (e) {
     console.error(e);
     setPoolStatus(e.reason || e.message || "Approval failed");
@@ -399,3 +514,24 @@ async function changeApproval(direction) {
 
 $("increaseApprovalBtn").onclick = () => changeApproval("increase");
 $("decreaseApprovalBtn").onclick = () => changeApproval("decrease");
+
+async function approveRouter() {
+  if (!state.signer) {
+    await connect();
+    if (!state.signer) return;
+  }
+  try {
+    setSwapUsdcStatus("Approving router...");
+    const tx = await state.usdc.connect(state.signer).approve(UNISWAP_V2_ROUTER, ethers.MaxUint256);
+    setSwapUsdcStatus("Pending… " + tx.hash);
+    await tx.wait();
+    setSwapUsdcStatus("Router approved");
+    await refreshAllowance();
+    updateSwapUsdcState();
+  } catch (e) {
+    console.error(e);
+    setSwapUsdcStatus(e.reason || e.message || "Router approve failed");
+  }
+}
+
+$("routerApproveBtn").onclick = approveRouter;
