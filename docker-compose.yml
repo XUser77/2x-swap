@@ -1,0 +1,13 @@
+version: "3.9"
+
+name: '2xloans'
+
+services:
+  web:
+    image: nginx:alpine
+    container_name: x2loans-web
+    volumes:
+      - ./web:/usr/share/nginx/html:ro
+    ports:
+      - "8580:80"
+    restart: unless-stopped
