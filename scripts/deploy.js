@@ -1,4 +1,4 @@
-/* Deployment script for X2Pool
+/* Deployment script for X2Swap (deploys X2Pool internally)
  *
  * Usage (mainnet fork defaults):
  *   ASSET=0x... TOKEN_NAME="ETH-USDC X2 Pool" TOKEN_SYMBOL="2xETHxUSDC" npx hardhat run scripts/deploy.js --network <network>
@@ -19,17 +19,21 @@ async function main() {
   console.log(`Deploying with ${deployer.address}`);
   console.log(`Asset: ${asset}`);
 
-  const Pool = await hre.ethers.getContractFactory("X2Pool");
-  const pool = await Pool.deploy(asset, targetToken, name, symbol);
-  await pool.waitForDeployment();
+  const Swap = await hre.ethers.getContractFactory("X2Swap");
+  const swap = await Swap.deploy(asset, targetToken, name, symbol);
+  await swap.waitForDeployment();
+  const pool = await swap.pool();
 
-  console.log(`X2Pool deployed to: ${pool.target}`);
-  console.log(`Underlying asset: ${asset}`);
+  console.log(`X2Swap deployed to: ${swap.target}`);
+  console.log(`X2Pool deployed to: ${pool}`);
+
+  // Read asset from the deployed pool to persist source-of-truth
+  const assetAddr = await (await hre.ethers.getContractAt("X2Pool", pool)).asset();
+  console.log(`Underlying asset: ${assetAddr}`);
 
   const deployment = {
     network: hre.network.name,
-    asset,
-    vault: pool.target
+    x2swap: swap.target
   };
 
   const dataDir = path.join(__dirname, "..", "web", "data");

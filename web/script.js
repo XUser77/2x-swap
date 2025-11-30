@@ -10,6 +10,12 @@ const routerAbi = [
   "function swapExactTokensForETH(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)"
 ];
 
+const swapAbi = [
+  "function pool() view returns (address)",
+  "function asset() view returns (address)",
+  "function targetToken() view returns (address)"
+];
+
 const erc20Abi = [
   "function name() view returns (string)",
   "function symbol() view returns (string)",
@@ -45,9 +51,13 @@ const state = {
   signer: null,
   addr: null,
   router: null,
+  swap: null,
+  swapAddress: null,
   asset: null,
   assetDecimals: 6,
   assetAddress: DEFAULT_ASSET,
+  targetToken: null,
+  targetTokenAddress: null,
   vaultAddress: null,
   vault: null,
   shareDecimals: 18,
@@ -79,7 +89,7 @@ const setRouterApprovalText = (txt) => {
 };
 const setShareLabel = (txt) => {
   const el = $("shareLabel");
-  if (el) el.textContent = txt;
+  if (el) el.textContent = txt || "Pool Token";
 };
 const setLoading = (msg) => {
   const el = $("loading");
@@ -137,16 +147,33 @@ async function connect() {
   state.signer = await state.provider.getSigner();
   state.addr = await state.signer.getAddress();
   state.router = new ethers.Contract(UNISWAP_V2_ROUTER, routerAbi, state.signer);
+  if (state.swapAddress) {
+    state.swap = new ethers.Contract(state.swapAddress, swapAbi, state.signer);
+    try {
+      const poolAddr = await state.swap.pool();
+      const assetAddr = await state.swap.asset();
+      const targetAddr = await state.swap.targetToken();
+      state.vaultAddress = poolAddr;
+      state.assetAddress = assetAddr;
+      state.targetTokenAddress = targetAddr;
+      // Fetch pool token symbol directly
+      try {
+        const poolContract = new ethers.Contract(poolAddr, vaultAbi, state.provider);
+        const shareSymbol = await poolContract.symbol();
+        setShareLabel(shareSymbol || "Pool Token");
+      } catch (e) {
+        console.error("Pool symbol fetch failed", e);
+        setShareLabel("Pool Token");
+      }
+    } catch (e) {
+      console.error("Swap fetch failed", e);
+    }
+  }
   if (state.vaultAddress) {
     state.vault = new ethers.Contract(state.vaultAddress, vaultAbi, state.signer);
     state.assetAddress = await state.vault.asset();
     state.shareDecimals = await state.vault.decimals();
-    try {
-      const shareSymbol = await state.vault.symbol();
-      setShareLabel(shareSymbol || "Shares");
-    } catch {
-      setShareLabel("Shares");
-    }
+    // share label already set above
   }
   state.asset = new ethers.Contract(state.assetAddress, erc20Abi, state.provider);
   try {
@@ -374,15 +401,10 @@ async function loadConfig() {
     const res = await fetch("/data/deployment.json", { cache: "no-cache" });
     if (!res.ok) throw new Error("config not found");
     const cfg = await res.json();
-    if (cfg.vault) {
-      state.vaultAddress = cfg.vault;
-    } else if (cfg.pool) {
-      state.vaultAddress = cfg.pool;
-    }
-    if (cfg.asset) {
-      state.assetAddress = cfg.asset;
-    } else if (cfg.sourceToken) {
-      state.assetAddress = cfg.sourceToken;
+    if (cfg.x2swap) {
+      state.swapAddress = cfg.x2swap;
+    } else {
+      throw new Error("x2swap missing");
     }
     showApp();
   } catch (err) {
