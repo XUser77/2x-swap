@@ -1,0 +1,225 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import {IERC20} from "./interfaces/IERC20.sol";
+import {IERC4626} from "./interfaces/IERC4626.sol";
+
+/// @title X2Pool - ERC-4626 style single contract for deposits and withdrawals
+/// @notice Shares represent a pro-rata claim on pool assets; conversions adjust with gains/losses.
+contract X2Pool is IERC4626 {
+    // ERC20 share metadata
+    string public name;
+    string public symbol;
+    uint8 public immutable decimals;
+
+    IERC20 public immutable underlying;
+    IERC20 public immutable targetToken;
+
+    uint256 public totalSupply;
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    constructor(address asset_, address targetToken_, string memory name_, string memory symbol_) {
+        require(asset_ != address(0), "Asset required");
+        require(targetToken_ != address(0), "Target token required");
+        underlying = IERC20(asset_);
+        targetToken = IERC20(targetToken_);
+        decimals = underlying.decimals();
+        name = name_;
+        symbol = symbol_;
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            VIEW HELPERS
+    //////////////////////////////////////////////////////////////*/
+
+    function asset() external view override returns (address) {
+        return address(underlying);
+    }
+
+    function totalAssets() public view override returns (uint256) {
+        return underlying.balanceOf(address(this));
+    }
+
+    function convertToShares(uint256 assets) public view override returns (uint256) {
+        return _convertToShares(assets, false);
+    }
+
+    function convertToAssets(uint256 shares) public view override returns (uint256) {
+        return _convertToAssets(shares, false);
+    }
+
+    function previewDeposit(uint256 assets) external view override returns (uint256) {
+        return _convertToShares(assets, false);
+    }
+
+    function previewMint(uint256 shares) external view override returns (uint256) {
+        return _convertToAssets(shares, true);
+    }
+
+    function previewWithdraw(uint256 assets) external view override returns (uint256) {
+        return _convertToShares(assets, true);
+    }
+
+    function previewRedeem(uint256 shares) external view override returns (uint256) {
+        return _convertToAssets(shares, false);
+    }
+
+    function maxDeposit(address) external pure override returns (uint256) {
+        return type(uint256).max;
+    }
+
+    function maxMint(address) external pure override returns (uint256) {
+        return type(uint256).max;
+    }
+
+    function maxWithdraw(address owner) external view override returns (uint256) {
+        return _convertToAssets(balanceOf[owner], false);
+    }
+
+    function maxRedeem(address owner) external view override returns (uint256) {
+        return balanceOf[owner];
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                             ERC20 LOGIC
+    //////////////////////////////////////////////////////////////*/
+
+    function transfer(address to, uint256 value) external override returns (bool) {
+        _transfer(msg.sender, to, value);
+        return true;
+    }
+
+    function approve(address spender, uint256 value) external override returns (bool) {
+        _approve(msg.sender, spender, value);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 value) external override returns (bool) {
+        uint256 currentAllowance = allowance[from][msg.sender];
+        require(currentAllowance >= value, "ERC20: transfer amount exceeds allowance");
+        _transfer(from, to, value);
+        unchecked {
+            _approve(from, msg.sender, currentAllowance - value);
+        }
+        return true;
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            POOL ACTIONS
+    //////////////////////////////////////////////////////////////*/
+
+    function deposit(uint256 assets, address receiver) public override returns (uint256 shares) {
+        require(assets > 0, "Zero assets");
+        shares = convertToShares(assets);
+        require(underlying.transferFrom(msg.sender, address(this), assets), "Asset transfer failed");
+        _mint(receiver, shares);
+        emit Deposit(msg.sender, receiver, assets, shares);
+    }
+
+    function mint(uint256 shares, address receiver) external override returns (uint256 assets) {
+        require(shares > 0, "Zero shares");
+        assets = convertToAssets(shares);
+        require(underlying.transferFrom(msg.sender, address(this), assets), "Asset transfer failed");
+        _mint(receiver, shares);
+        emit Deposit(msg.sender, receiver, assets, shares);
+    }
+
+    function withdraw(uint256 assets, address receiver, address owner) public override returns (uint256 shares) {
+        require(assets > 0, "Zero assets");
+        shares = convertToShares(assets);
+        if (msg.sender != owner) {
+            uint256 currentAllowance = allowance[owner][msg.sender];
+            require(currentAllowance >= shares, "Allowance exceeded");
+            unchecked {
+                _approve(owner, msg.sender, currentAllowance - shares);
+            }
+        }
+        _burn(owner, shares);
+        require(underlying.transfer(receiver, assets), "Asset transfer failed");
+        emit Withdraw(msg.sender, receiver, owner, assets, shares);
+    }
+
+    function redeem(uint256 shares, address receiver, address owner) external override returns (uint256 assets) {
+        require(shares > 0, "Zero shares");
+        assets = convertToAssets(shares);
+        if (msg.sender != owner) {
+            uint256 currentAllowance = allowance[owner][msg.sender];
+            require(currentAllowance >= shares, "Allowance exceeded");
+            unchecked {
+                _approve(owner, msg.sender, currentAllowance - shares);
+            }
+        }
+        _burn(owner, shares);
+        require(underlying.transfer(receiver, assets), "Asset transfer failed");
+        emit Withdraw(msg.sender, receiver, owner, assets, shares);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                          INTERNAL HELPERS
+    //////////////////////////////////////////////////////////////*/
+
+    function _transfer(address from, address to, uint256 value) internal {
+        require(from != address(0), "Transfer from zero");
+        require(to != address(0), "Transfer to zero");
+        uint256 fromBalance = balanceOf[from];
+        require(fromBalance >= value, "Balance too low");
+        unchecked {
+            balanceOf[from] = fromBalance - value;
+            balanceOf[to] += value;
+        }
+        emit Transfer(from, to, value);
+    }
+
+    function _mint(address to, uint256 value) internal {
+        require(to != address(0), "Mint to zero");
+        totalSupply += value;
+        balanceOf[to] += value;
+        emit Transfer(address(0), to, value);
+    }
+
+    function _burn(address from, uint256 value) internal {
+        require(from != address(0), "Burn from zero");
+        uint256 fromBalance = balanceOf[from];
+        require(fromBalance >= value, "Burn exceeds balance");
+        unchecked {
+            balanceOf[from] = fromBalance - value;
+            totalSupply -= value;
+        }
+        emit Transfer(from, address(0), value);
+    }
+
+    function _approve(address owner_, address spender, uint256 value) internal {
+        require(owner_ != address(0), "Approve from zero");
+        require(spender != address(0), "Approve to zero");
+        allowance[owner_][spender] = value;
+        emit Approval(owner_, spender, value);
+    }
+
+    // Shares reflect pro-rata claim: shares / totalSupply == assets / totalAssets
+    function _convertToShares(uint256 assets, bool roundUp) internal view returns (uint256) {
+        uint256 supply = totalSupply;
+        uint256 backing = totalAssets();
+        if (supply == 0 || backing == 0) {
+            return assets;
+        }
+        uint256 num = assets * supply;
+        if (roundUp && num % backing != 0) {
+            return num / backing + 1;
+        }
+        return num / backing;
+    }
+
+    function _convertToAssets(uint256 shares, bool roundUp) internal view returns (uint256) {
+        uint256 supply = totalSupply;
+        uint256 backing = totalAssets();
+        if (supply == 0 || backing == 0) {
+            return shares;
+        }
+        uint256 num = shares * backing;
+        if (roundUp && num % supply != 0) {
+            return num / supply + 1;
+        }
+        return num / supply;
+    }
+}

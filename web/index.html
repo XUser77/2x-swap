@@ -171,7 +171,7 @@
             <div class="balance-value" id="usdcBal">–</div>
           </div>
           <div class="balance-row">
-            <div class="balance-label">LP</div>
+            <div class="balance-label" id="shareLabel">Shares</div>
             <div class="balance-value" id="lpBal">–</div>
           </div>
         </div>
@@ -233,7 +233,7 @@
 
     <div class="card">
       <h2 style="margin:0 0 6px;font-size:18px;">Pool Actions</h2>
-      <p class="muted">Deposit source token to mint LP, or burn LP to withdraw source token.</p>
+      <p class="muted">Deposit underlying to mint pool shares, or redeem shares for underlying.</p>
 
       <div class="panel" style="margin-bottom:14px;">
         <div class="panel-header">Approval to Pool</div>
@@ -244,16 +244,7 @@
       </div>
 
       <div style="margin-top:12px;">
-        <label for="approvalAmount">Approval amount (source)</label>
-        <input id="approvalAmount" type="number" step="0.0001" min="0" placeholder="100" />
-        <div style="margin-top:8px;" class="row">
-          <button id="increaseApprovalBtn" disabled>Increase</button>
-          <button id="decreaseApprovalBtn" disabled>Decrease</button>
-        </div>
-      </div>
-
-      <div style="margin-top:12px;">
-        <label for="depositAmount">Deposit amount (source)</label>
+        <label for="depositAmount">Deposit amount (underlying)</label>
         <input id="depositAmount" type="number" step="0.0001" min="0" placeholder="100" />
         <div style="margin-top:8px;">
           <button id="depositBtn" disabled>Deposit</button>
@@ -261,10 +252,10 @@
       </div>
 
       <div style="margin-top:20px;">
-        <label for="withdrawAmount">Withdraw amount (LP)</label>
+        <label for="withdrawAmount">Withdraw amount (shares)</label>
         <input id="withdrawAmount" type="number" step="0.0001" min="0" placeholder="100" />
         <div style="margin-top:8px;">
-          <button id="withdrawBtn" disabled>Withdraw</button>
+          <button id="withdrawBtn" disabled>Redeem</button>
         </div>
       </div>
 

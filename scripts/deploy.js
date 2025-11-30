@@ -1,42 +1,38 @@
-/* Deployment script for LiquidityPool + LPToken (LPToken is deployed inside the pool)
+/* Deployment script for X2Pool
  *
- * Usage:
- *   SOURCE_TOKEN=0x... TARGET_TOKEN=0x... TOKEN_NAME="X2 MyToken" TOKEN_SYMBOL="X2MY" \
- *   npx hardhat run scripts/deploy.js --network <network>
+ * Usage (mainnet fork defaults):
+ *   ASSET=0x... TOKEN_NAME="ETH-USDC X2 Pool" TOKEN_SYMBOL="2xETHxUSDC" npx hardhat run scripts/deploy.js --network <network>
  *
- * Expects a Hardhat environment with LiquidityPool compiled.
+ * If ASSET is omitted, defaults to mainnet USDC for fork testing.
  */
 const fs = require("fs");
 const path = require("path");
 const hre = require("hardhat");
 
 async function main() {
-  const source = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"; // USDC
-  const target = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"; // WETH9
-  const name = "2x LP USDC-ETH";
-  const symbol = "2xUSDCxETH";
+  const asset = process.env.ASSET || "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"; // USDC mainnet
+  const targetToken = process.env.ASSET || "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"; // WETH mainnet
+  const name = process.env.TOKEN_NAME || "ETH-USDC X2 Pool";
+  const symbol = process.env.TOKEN_SYMBOL || "2xETHxUSDC";
 
   const [deployer] = await hre.ethers.getSigners();
   console.log(`Deploying with ${deployer.address}`);
+  console.log(`Asset: ${asset}`);
 
-  const LiquidityPool = await hre.ethers.getContractFactory("LiquidityPool");
-  const pool = await LiquidityPool.deploy(source, target, name, symbol);
+  const Pool = await hre.ethers.getContractFactory("X2Pool");
+  const pool = await Pool.deploy(asset, targetToken, name, symbol);
   await pool.waitForDeployment();
 
-  console.log(`LiquidityPool deployed to: ${pool.target}`);
-  console.log(`LPToken deployed to: ${await pool.lpToken()}`);
-  console.log(`Source token: ${await pool.sourceToken()}`);
-  console.log(`Target token: ${await pool.targetToken()}`);
+  console.log(`X2Pool deployed to: ${pool.target}`);
+  console.log(`Underlying asset: ${asset}`);
 
   const deployment = {
     network: hre.network.name,
-    sourceToken: source,
-    targetToken: target,
-    pool: pool.target,
-    lpToken: await pool.lpToken()
+    asset,
+    vault: pool.target
   };
 
-  const dataDir = path.join(__dirname, "..", "web/data");
+  const dataDir = path.join(__dirname, "..", "web", "data");
   if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true });
   }

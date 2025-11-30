@@ -2,19 +2,42 @@ import { ethers } from "https://cdn.jsdelivr.net/npm/ethers@6.11.1/dist/ethers.m
 
 const UNISWAP_V2_ROUTER = "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D";
 const WETH = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
-const USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+const DEFAULT_ASSET = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"; // USDC mainnet addr for fork fallback
 
 const routerAbi = [
   "function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory amounts)",
   "function swapExactETHForTokens(uint amountOutMin, address[] calldata path, address to, uint deadline) external payable returns (uint[] memory amounts)",
   "function swapExactTokensForETH(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)"
 ];
+
 const erc20Abi = [
-  "function balanceOf(address) view returns (uint256)",
+  "function name() view returns (string)",
+  "function symbol() view returns (string)",
   "function decimals() view returns (uint8)",
+  "function balanceOf(address) view returns (uint256)",
   "function allowance(address owner, address spender) view returns (uint256)",
   "function approve(address spender, uint256 amount) returns (bool)",
-  "function symbol() view returns (string)"
+  "function transferFrom(address from, address to, uint256 amount) returns (bool)"
+];
+
+const vaultAbi = [
+  // ERC20
+  "function name() view returns (string)",
+  "function symbol() view returns (string)",
+  "function decimals() view returns (uint8)",
+  "function totalSupply() view returns (uint256)",
+  "function balanceOf(address) view returns (uint256)",
+  "function allowance(address owner, address spender) view returns (uint256)",
+  "function approve(address spender, uint256 amount) returns (bool)",
+  // ERC4626
+  "function asset() view returns (address)",
+  "function totalAssets() view returns (uint256)",
+  "function convertToShares(uint256) view returns (uint256)",
+  "function convertToAssets(uint256) view returns (uint256)",
+  "function deposit(uint256 assets, address receiver) returns (uint256 shares)",
+  "function mint(uint256 shares, address receiver) returns (uint256 assets)",
+  "function withdraw(uint256 assets, address receiver, address owner) returns (uint256 shares)",
+  "function redeem(uint256 shares, address receiver, address owner) returns (uint256 assets)"
 ];
 
 const state = {
@@ -22,14 +45,12 @@ const state = {
   signer: null,
   addr: null,
   router: null,
-  usdc: null,
-  usdcDecimals: 6,
-  usdcAddress: USDC,
-  lpAddress: null,
-  lp: null,
-  lpDecimals: 18,
-  poolAddress: null,
-  pool: null,
+  asset: null,
+  assetDecimals: 6,
+  assetAddress: DEFAULT_ASSET,
+  vaultAddress: null,
+  vault: null,
+  shareDecimals: 18,
   allowance: 0n,
   routerAllowance: 0n
 };
@@ -54,6 +75,10 @@ const setApprovalText = (txt) => {
 };
 const setRouterApprovalText = (txt) => {
   const el = $("routerApprovalVal");
+  if (el) el.textContent = txt;
+};
+const setShareLabel = (txt) => {
+  const el = $("shareLabel");
   if (el) el.textContent = txt;
 };
 const setLoading = (msg) => {
@@ -85,12 +110,6 @@ const setPoolDisabled = (depositDisabled, withdrawDisabled) => {
   if (d) d.disabled = depositDisabled;
   if (w) w.disabled = withdrawDisabled;
 };
-const setApprovalDisabled = (incDisabled, decDisabled) => {
-  const inc = $("increaseApprovalBtn");
-  const dec = $("decreaseApprovalBtn");
-  if (inc) inc.disabled = incDisabled;
-  if (dec) dec.disabled = decDisabled;
-};
 const isAmountValid = () => {
   const val = $("amount").value;
   return val && !isNaN(val) && Number(val) > 0;
@@ -107,10 +126,6 @@ const isWithdrawValid = () => {
   const val = $("withdrawAmount").value;
   return val && !isNaN(val) && Number(val) > 0;
 };
-const isApprovalValid = () => {
-  const val = $("approvalAmount").value;
-  return val && !isNaN(val) && Number(val) > 0;
-};
 
 async function connect() {
   if (!window.ethereum) {
@@ -122,28 +137,23 @@ async function connect() {
   state.signer = await state.provider.getSigner();
   state.addr = await state.signer.getAddress();
   state.router = new ethers.Contract(UNISWAP_V2_ROUTER, routerAbi, state.signer);
-  state.usdc = new ethers.Contract(state.usdcAddress, erc20Abi, state.provider);
-  try {
-    state.usdcDecimals = await state.usdc.decimals();
-  } catch (e) {
-    console.error(e);
-    state.usdcDecimals = 6;
-  }
-  if (state.lpAddress) {
-    state.lp = new ethers.Contract(state.lpAddress, erc20Abi, state.provider);
+  if (state.vaultAddress) {
+    state.vault = new ethers.Contract(state.vaultAddress, vaultAbi, state.signer);
+    state.assetAddress = await state.vault.asset();
+    state.shareDecimals = await state.vault.decimals();
     try {
-      state.lpDecimals = await state.lp.decimals();
-    } catch (e) {
-      console.error(e);
-      state.lpDecimals = 18;
+      const shareSymbol = await state.vault.symbol();
+      setShareLabel(shareSymbol || "Shares");
+    } catch {
+      setShareLabel("Shares");
     }
   }
-  if (state.poolAddress) {
-    state.pool = new ethers.Contract(
-      state.poolAddress,
-      ["function deposit(uint256) external returns (uint256)", "function withdraw(uint256) external returns (uint256)"],
-      state.signer
-    );
+  state.asset = new ethers.Contract(state.assetAddress, erc20Abi, state.provider);
+  try {
+    state.assetDecimals = await state.asset.decimals();
+  } catch (e) {
+    console.error(e);
+    state.assetDecimals = 6;
   }
   $("addr").textContent = `${short(state.addr)}`;
   await refreshBalances();
@@ -160,20 +170,22 @@ async function refreshBalances() {
   if (!state.signer) return;
   const ethBal = await state.provider.getBalance(state.addr);
   $("ethBal").textContent = `${ethers.formatEther(ethBal)}`;
-  const usdcBal = await state.usdc.balanceOf(state.addr);
-  const usdcDisplay = Number(ethers.formatUnits(usdcBal, state.usdcDecimals));
-  $("usdcBal").textContent = `${usdcDisplay.toFixed(2)}`;
-  if (state.lp) {
+  if (state.asset) {
+    const assetBal = await state.asset.balanceOf(state.addr);
+    const assetDisplay = Number(ethers.formatUnits(assetBal, state.assetDecimals));
+    $("usdcBal").textContent = `${assetDisplay.toFixed(2)}`;
+  }
+  if (state.vault) {
     try {
-      const lpBal = await state.lp.balanceOf(state.addr);
-      const display = Number(ethers.formatUnits(lpBal, state.lpDecimals));
+      const shareBal = await state.vault.balanceOf(state.addr);
+      const display = Number(ethers.formatUnits(shareBal, state.shareDecimals));
       $("lpBal").textContent = `${display.toFixed(4)}`;
     } catch (e) {
       console.error(e);
       $("lpBal").textContent = "?";
     }
   } else {
-    $("lpBal").textContent = "(no config)";
+    $("lpBal").textContent = "(no vault)";
   }
 }
 
@@ -184,17 +196,17 @@ async function refreshAllowance() {
     return;
   }
   try {
-    if (state.poolAddress) {
-      const allowance = await state.usdc.allowance(state.addr, state.poolAddress);
+    if (state.vaultAddress) {
+      const allowance = await state.asset.allowance(state.addr, state.vaultAddress);
       state.allowance = allowance;
-      const display = Number(ethers.formatUnits(allowance, state.usdcDecimals));
+      const display = Number(ethers.formatUnits(allowance, state.assetDecimals));
       setApprovalText(display.toFixed(2));
     } else {
       setApprovalText("–");
     }
-    const routerAllowance = await state.usdc.allowance(state.addr, UNISWAP_V2_ROUTER);
+    const routerAllowance = await state.asset.allowance(state.addr, UNISWAP_V2_ROUTER);
     state.routerAllowance = routerAllowance;
-    const routerDisplay = Number(ethers.formatUnits(routerAllowance, state.usdcDecimals));
+    const routerDisplay = Number(ethers.formatUnits(routerAllowance, state.assetDecimals));
     setRouterApprovalText(routerDisplay.toFixed(2));
   } catch (e) {
     console.error(e);
@@ -217,9 +229,9 @@ async function quote() {
   if (!state.router) return;
   try {
     const amountInWei = ethers.parseEther(val.toString());
-    const amounts = await state.router.getAmountsOut(amountInWei, [WETH, USDC]);
+    const amounts = await state.router.getAmountsOut(amountInWei, [WETH, state.assetAddress]);
     const out = amounts[1];
-    $("quote").textContent = (Number(out) / 1e6).toFixed(4) + " USDC";
+    $("quote").textContent = ethers.formatUnits(out, state.assetDecimals) + " asset";
   } catch (err) {
     console.error(err);
     $("quote").textContent = "Error";
@@ -236,8 +248,8 @@ async function quoteUsdc() {
   }
   if (!state.router) return;
   try {
-    const amountIn = ethers.parseUnits(val.toString(), state.usdcDecimals);
-    const amounts = await state.router.getAmountsOut(amountIn, [USDC, WETH]);
+    const amountIn = ethers.parseUnits(val.toString(), state.assetDecimals);
+    const amounts = await state.router.getAmountsOut(amountIn, [state.assetAddress, WETH]);
     const out = amounts[1];
     $("quoteUsdc").textContent = ethers.formatEther(out) + " ETH";
   } catch (err) {
@@ -259,7 +271,7 @@ async function swap() {
   const amountInWei = ethers.parseEther(val.toString());
   let minOut;
   try {
-    const amounts = await state.router.getAmountsOut(amountInWei, [WETH, USDC]);
+    const amounts = await state.router.getAmountsOut(amountInWei, [WETH, state.assetAddress]);
     minOut = amounts[1] * 99n / 100n;
   } catch (err) {
     console.error(err);
@@ -269,7 +281,7 @@ async function swap() {
     setStatus("Sending swap…");
     const tx = await state.router.swapExactETHForTokens(
       minOut,
-      [WETH, USDC],
+      [WETH, state.assetAddress],
       state.addr,
       Math.floor(Date.now() / 1000) + 60 * 10,
       { value: amountInWei, gasLimit: 700000n }
@@ -296,14 +308,14 @@ async function swapUsdc() {
   }
   let amountIn;
   try {
-    amountIn = ethers.parseUnits(val.toString(), state.usdcDecimals);
+    amountIn = ethers.parseUnits(val.toString(), state.assetDecimals);
   } catch (e) {
     console.error(e);
     return setSwapUsdcStatus("Invalid amount");
   }
   let minOut;
   try {
-    const amounts = await state.router.getAmountsOut(amountIn, [USDC, WETH]);
+    const amounts = await state.router.getAmountsOut(amountIn, [state.assetAddress, WETH]);
     minOut = amounts[1] * 99n / 100n;
   } catch (err) {
     console.error(err);
@@ -317,7 +329,7 @@ async function swapUsdc() {
     const tx = await state.router.swapExactTokensForETH(
       amountIn,
       minOut,
-      [USDC, WETH],
+      [state.assetAddress, WETH],
       state.addr,
       Math.floor(Date.now() / 1000) + 60 * 10,
       { gasLimit: 700000n }
@@ -355,7 +367,6 @@ function updateSwapUsdcState() {
 function updatePoolState() {
   const connected = Boolean(state.signer);
   setPoolDisabled(!(connected && isDepositValid()), !(connected && isWithdrawValid()));
-  setApprovalDisabled(!(connected && isApprovalValid()), !(connected && isApprovalValid()));
 }
 
 async function loadConfig() {
@@ -363,19 +374,15 @@ async function loadConfig() {
     const res = await fetch("/data/deployment.json", { cache: "no-cache" });
     if (!res.ok) throw new Error("config not found");
     const cfg = await res.json();
-    if (cfg.pool) {
-      state.poolAddress = cfg.pool;
+    if (cfg.vault) {
+      state.vaultAddress = cfg.vault;
+    } else if (cfg.pool) {
+      state.vaultAddress = cfg.pool;
     }
-    if (cfg.sourceToken) {
-      state.usdcAddress = cfg.sourceToken;
-    }
-    if (cfg.lpToken) {
-      state.lpAddress = cfg.lpToken;
-      if (state.signer) {
-        $("lpBal").textContent = "loading...";
-      } else {
-        $("lpBal").textContent = "–";
-      }
+    if (cfg.asset) {
+      state.assetAddress = cfg.asset;
+    } else if (cfg.sourceToken) {
+      state.assetAddress = cfg.sourceToken;
     }
     showApp();
   } catch (err) {
@@ -393,9 +400,6 @@ $("depositAmount").oninput = () => {
 $("withdrawAmount").oninput = () => {
   updatePoolState();
 };
-$("approvalAmount").oninput = () => {
-  updatePoolState();
-};
 $("amountUsdc").oninput = () => {
   updateSwapUsdcState();
 };
@@ -405,7 +409,7 @@ async function depositPool() {
     await connect();
     if (!state.signer) return;
   }
-  if (!state.pool) {
+  if (!state.vault) {
     return setPoolStatus("Pool not configured");
   }
   const val = $("depositAmount").value;
@@ -414,14 +418,16 @@ async function depositPool() {
   }
   let amount;
   try {
-    amount = ethers.parseUnits(val.toString(), state.usdcDecimals);
+    amount = ethers.parseUnits(val.toString(), state.assetDecimals);
   } catch (e) {
     console.error(e);
     return setPoolStatus("Invalid amount");
   }
   try {
+    const ok = await ensureVaultApproval(amount);
+    if (!ok) return;
     setPoolStatus("Depositing...");
-    const tx = await state.pool.deposit(amount, { gasLimit: 700000n });
+    const tx = await state.vault.deposit(amount, state.addr, { gasLimit: 700000n });
     setPoolStatus("Pending… " + tx.hash);
     await tx.wait();
     setPoolStatus("Deposit confirmed");
@@ -438,7 +444,7 @@ async function withdrawPool() {
     await connect();
     if (!state.signer) return;
   }
-  if (!state.pool) {
+  if (!state.vault) {
     return setPoolStatus("Pool not configured");
   }
   const val = $("withdrawAmount").value;
@@ -447,17 +453,17 @@ async function withdrawPool() {
   }
   let amount;
   try {
-    amount = ethers.parseUnits(val.toString(), state.lpDecimals);
+    amount = ethers.parseUnits(val.toString(), state.shareDecimals);
   } catch (e) {
     console.error(e);
     return setPoolStatus("Invalid amount");
   }
   try {
-    setPoolStatus("Withdrawing...");
-    const tx = await state.pool.withdraw(amount, { gasLimit: 700000n });
+    setPoolStatus("Redeeming...");
+    const tx = await state.vault.redeem(amount, state.addr, state.addr, { gasLimit: 700000n });
     setPoolStatus("Pending… " + tx.hash);
     await tx.wait();
-    setPoolStatus("Withdrawal confirmed");
+    setPoolStatus("Redemption confirmed");
     await refreshBalances();
     await refreshAllowance();
   } catch (e) {
@@ -468,52 +474,6 @@ async function withdrawPool() {
 
 $("depositBtn").onclick = depositPool;
 $("withdrawBtn").onclick = withdrawPool;
-
-async function changeApproval(direction) {
-  if (!state.signer) {
-    await connect();
-    if (!state.signer) return;
-  }
-  if (!state.poolAddress) {
-    return setPoolStatus("Pool not configured");
-  }
-  const val = $("approvalAmount").value;
-  if (!val || isNaN(val) || Number(val) <= 0) {
-    return setPoolStatus("Enter approval amount");
-  }
-  let delta;
-  try {
-    delta = ethers.parseUnits(val.toString(), state.usdcDecimals);
-  } catch (e) {
-    console.error(e);
-    return setPoolStatus("Invalid amount");
-  }
-  let newAllowance;
-  if (direction === "increase") {
-    newAllowance = state.allowance + delta;
-  } else {
-    if (state.allowance < delta) {
-      return setPoolStatus("Decrease exceeds current allowance");
-    }
-    newAllowance = state.allowance - delta;
-  }
-  try {
-    setPoolStatus(`${direction === "increase" ? "Increasing" : "Decreasing"} approval...`);
-    const tx = await state.usdc.connect(state.signer).approve(state.poolAddress, newAllowance);
-    setPoolStatus("Pending… " + tx.hash);
-    await tx.wait();
-    setPoolStatus("Approval updated");
-    await refreshAllowance();
-    updatePoolState();
-    updateSwapUsdcState();
-  } catch (e) {
-    console.error(e);
-    setPoolStatus(e.reason || e.message || "Approval failed");
-  }
-}
-
-$("increaseApprovalBtn").onclick = () => changeApproval("increase");
-$("decreaseApprovalBtn").onclick = () => changeApproval("decrease");
 
 async function approveRouter() {
   if (!state.signer) {
@@ -535,3 +495,20 @@ async function approveRouter() {
 }
 
 $("routerApproveBtn").onclick = approveRouter;
+
+async function ensureVaultApproval(amount) {
+  try {
+    const current = await state.asset.allowance(state.addr, state.vaultAddress);
+    if (current >= amount) return true;
+    setPoolStatus("Approving vault...");
+    const tx = await state.asset.connect(state.signer).approve(state.vaultAddress, ethers.MaxUint256);
+    setPoolStatus("Pending… " + tx.hash);
+    await tx.wait();
+    await refreshAllowance();
+    return true;
+  } catch (e) {
+    console.error(e);
+    setPoolStatus(e.reason || e.message || "Pool approve failed");
+    return false;
+  }
+}
