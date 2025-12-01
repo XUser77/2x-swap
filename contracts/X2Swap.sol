@@ -35,19 +35,27 @@ contract X2Swap {
         require(assetAmount > 0, "Zero amount");
         // pull tokens from user
         require(asset.transferFrom(msg.sender, address(this), assetAmount), "Transfer failed");
-        // Borrow the same amount from the pool to this swap (mock usage)
+        // Borrow the same amount from the pool to this swap
         pool.borrow(assetAmount);
-        // Swap borrowed asset to target token (assumes allowance to router via pool -> swap)
-        uint256 expectedOut = swapRouter.getAmountOut(address(asset), assetAmount);
+
+        uint256 totalAmount = assetAmount * 2;
+
+        // Swap combined amount to target token (assumes allowance to router via pool -> swap)
+        uint256 expectedOut = swapRouter.getAmountOut(address(asset), totalAmount);
         require(expectedOut > 0, "No output");
-        uint256 amountOut = swapRouter.swap(address(asset), assetAmount, expectedOut);
+
+        uint256 currentAllowance = asset.allowance(address(this), address(swapRouter));
+        if (currentAllowance < totalAmount) {
+            asset.approve(address(swapRouter), type(uint256).max);
+        }
+        uint256 amountOut = swapRouter.swap(address(asset), totalAmount, expectedOut);
         require(amountOut >= expectedOut, "Swap slippage");
 
         id = nextPositionId++;
         Position memory p = Position({
             id: id,
             sender: msg.sender,
-            openAssetAmount: assetAmount,
+            openAssetAmount: totalAmount,
             targetAmount: amountOut,
             openDate: block.timestamp,
             expireDate: block.timestamp + positionDuration,
@@ -67,5 +75,9 @@ contract X2Swap {
         positions[id].closeDate = block.timestamp;
         positions[id].closeAssetAmount = positions[id].openAssetAmount; // mock close value
         emit ClosePosition(id, positions[id].closeAssetAmount);
+    }
+
+    function getPositionsOf(address owner) external view returns (uint256[] memory) {
+        return positionsOf[owner];
     }
 }

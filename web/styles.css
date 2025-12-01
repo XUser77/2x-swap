@@ -20,9 +20,9 @@ body {
   padding: 24px;
 }
 .layout {
-  width: min(1040px, 100%);
+  width: min(1300px, 100%);
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 16px;
 }
 .card {
@@ -30,7 +30,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 16px;
   padding: 24px;
-  width: min(420px, 100%);
+  width: 100%;
   box-shadow: 0 20px 60px rgba(0,0,0,0.35);
 }
 h1 {

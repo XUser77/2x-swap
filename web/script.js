@@ -13,7 +13,11 @@ const routerAbi = [
 const swapAbi = [
   "function pool() view returns (address)",
   "function asset() view returns (address)",
-  "function targetToken() view returns (address)"
+  "function targetToken() view returns (address)",
+  "function positionDuration() view returns (uint256)",
+  "function openPosition(uint256 assetAmount) returns (uint256)",
+  "function getPositionsOf(address) view returns (uint256[] memory)",
+  "function positions(uint256) view returns (uint256,address,uint256,uint256,uint256,uint256,uint256,uint256,uint256)"
 ];
 
 const erc20Abi = [
@@ -38,6 +42,7 @@ const vaultAbi = [
   // ERC4626
   "function asset() view returns (address)",
   "function totalAssets() view returns (uint256)",
+  "function totalDebt() view returns (uint256)",
   "function convertToShares(uint256) view returns (uint256)",
   "function convertToAssets(uint256) view returns (uint256)",
   "function deposit(uint256 assets, address receiver) returns (uint256 shares)",
@@ -58,11 +63,16 @@ const state = {
   assetAddress: DEFAULT_ASSET,
   targetToken: null,
   targetTokenAddress: null,
+  targetDecimals: 18,
+  positionDuration: 0n,
   vaultAddress: null,
   vault: null,
   shareDecimals: 18,
   allowance: 0n,
-  routerAllowance: 0n
+  routerAllowance: 0n,
+  swapAllowance: 0n,
+  poolAvailable: 0n,
+  positions: []
 };
 
 const $ = (id) => document.getElementById(id);
@@ -87,9 +97,59 @@ const setRouterApprovalText = (txt) => {
   const el = $("routerApprovalVal");
   if (el) el.textContent = txt;
 };
+const setPositionStatus = (msg) => {
+  const el = $("positionStatus");
+  if (el) el.innerHTML = `<span>${msg}</span>`;
+};
+const setPositionQuote = (msg) => {
+  const el = $("positionQuote");
+  if (el) el.textContent = msg;
+};
+const setPositionRate = (msg) => {
+  const el = $("positionRate");
+  if (el) el.textContent = msg;
+};
 const setShareLabel = (txt) => {
   const el = $("shareLabel");
   if (el) el.textContent = txt || "Pool Token";
+};
+const setPoolAvailable = (txt) => {
+  const el = $("poolAvailable");
+  if (el) el.textContent = txt;
+};
+const setPoolAssets = (txt) => {
+  const el = $("poolAssets");
+  if (el) el.textContent = txt;
+};
+const setPoolDebt = (txt) => {
+  const el = $("poolDebt");
+  if (el) el.textContent = txt;
+};
+const renderPositions = () => {
+  const el = $("positionsList");
+  if (!el) return;
+  if (!state.positions.length) {
+    el.innerHTML = "No positions";
+    return;
+  }
+  const rows = state.positions
+    .map((p) => {
+      const openAmt = ethers.formatUnits(p.openAssetAmount, state.assetDecimals);
+      const targetAmt = ethers.formatUnits(p.targetAmount, state.targetDecimals);
+      const status = p.closeDate > 0 ? "Closed" : "Open";
+      const openDate = p.openDate ? new Date(Number(p.openDate) * 1000).toLocaleString() : "-";
+      return `<div class="balance-row" style="margin-bottom:6px;">
+        <div class="balance-label">#${p.id} ${status}</div>
+        <div class="balance-value">${openAmt} → ${targetAmt}</div>
+      </div>
+      <div class="muted" style="font-size:12px;margin:4px 0 10px;">Opened: ${openDate}</div>`;
+    })
+    .join("");
+  el.innerHTML = rows;
+};
+const setPositionDuration = (txt) => {
+  const el = $("positionDuration");
+  if (el) el.textContent = txt;
 };
 const setLoading = (msg) => {
   const el = $("loading");
@@ -120,6 +180,10 @@ const setPoolDisabled = (depositDisabled, withdrawDisabled) => {
   if (d) d.disabled = depositDisabled;
   if (w) w.disabled = withdrawDisabled;
 };
+const setOpenPositionDisabled = (disabled) => {
+  const btn = $("openPositionBtn");
+  if (btn) btn.disabled = disabled;
+};
 const isAmountValid = () => {
   const val = $("amount").value;
   return val && !isNaN(val) && Number(val) > 0;
@@ -134,6 +198,10 @@ const isDepositValid = () => {
 };
 const isWithdrawValid = () => {
   const val = $("withdrawAmount").value;
+  return val && !isNaN(val) && Number(val) > 0;
+};
+const isPositionValid = () => {
+  const val = $("positionAmount").value;
   return val && !isNaN(val) && Number(val) > 0;
 };
 
@@ -153,9 +221,12 @@ async function connect() {
       const poolAddr = await state.swap.pool();
       const assetAddr = await state.swap.asset();
       const targetAddr = await state.swap.targetToken();
+      const duration = await state.swap.positionDuration();
       state.vaultAddress = poolAddr;
       state.assetAddress = assetAddr;
       state.targetTokenAddress = targetAddr;
+      state.positionDuration = duration;
+      setPositionDuration(`${Number(duration) / 86400} days`);
       // Fetch pool token symbol directly
       try {
         const poolContract = new ethers.Contract(poolAddr, vaultAbi, state.provider);
@@ -175,6 +246,15 @@ async function connect() {
     state.shareDecimals = await state.vault.decimals();
     // share label already set above
   }
+  if (state.targetTokenAddress && !state.targetToken) {
+    try {
+      state.targetToken = new ethers.Contract(state.targetTokenAddress, erc20Abi, state.provider);
+      state.targetDecimals = await state.targetToken.decimals();
+    } catch (e) {
+      console.error("Target token load failed", e);
+      state.targetDecimals = 18;
+    }
+  }
   state.asset = new ethers.Contract(state.assetAddress, erc20Abi, state.provider);
   try {
     state.assetDecimals = await state.asset.decimals();
@@ -182,15 +262,25 @@ async function connect() {
     console.error(e);
     state.assetDecimals = 6;
   }
+  // swapAllowance check
+  try {
+    const swapAllowance = await state.asset.allowance(state.addr, state.swapAddress || state.vaultAddress);
+    state.swapAllowance = swapAllowance;
+  } catch (e) {
+    console.error(e);
+  }
+  await refreshPoolInfo();
   $("addr").textContent = `${short(state.addr)}`;
   await refreshBalances();
   await refreshAllowance();
+  await refreshPositions();
   setStatus("Connected");
   setConnStatus("Connected to Hardhat fork (chainId 31337)");
   setPoolStatus("Connected");
   updateSwapState();
   updateSwapUsdcState();
   updatePoolState();
+  updatePositionState();
 }
 
 async function refreshBalances() {
@@ -216,6 +306,65 @@ async function refreshBalances() {
   }
 }
 
+async function refreshPoolInfo() {
+  if (!state.vault) {
+    setPoolAvailable("–");
+    setPoolAssets("–");
+    setPoolDebt("–");
+    return;
+  }
+  try {
+    const assets = await state.vault.totalAssets();
+    const debt = await state.vault.totalDebt();
+    const totalWithDebt = assets + debt;
+    state.poolAvailable = assets;
+    setPoolAssets(ethers.formatUnits(totalWithDebt, state.assetDecimals));
+    setPoolAvailable(ethers.formatUnits(assets, state.assetDecimals));
+    setPoolDebt(ethers.formatUnits(debt, state.assetDecimals));
+  } catch (e) {
+    console.error(e);
+    setPoolAvailable("?");
+    setPoolAssets("?");
+    setPoolDebt("?");
+  }
+}
+
+async function refreshPositions() {
+  if (!state.swap || !state.addr) {
+    state.positions = [];
+    renderPositions();
+    return;
+  }
+  try {
+    const ids = await state.swap.getPositionsOf(state.addr);
+    const fetched = [];
+    for (const id of ids) {
+      try {
+        const pos = await state.swap.positions(id);
+        fetched.push({
+          id: Number(pos[0]),
+          sender: pos[1],
+          openAssetAmount: pos[2],
+          targetAmount: pos[3],
+          openDate: pos[4],
+          expireDate: pos[5],
+          profitSharing: pos[6],
+          closeDate: pos[7],
+          closeAssetAmount: pos[8]
+        });
+      } catch (e) {
+        console.error("Position fetch failed", e);
+      }
+    }
+    state.positions = fetched;
+    renderPositions();
+  } catch (e) {
+    console.error("Positions fetch failed", e);
+    state.positions = [];
+    renderPositions();
+  }
+}
+
 async function refreshAllowance() {
   if (!state.signer) {
     setApprovalText("–");
@@ -235,6 +384,8 @@ async function refreshAllowance() {
     state.routerAllowance = routerAllowance;
     const routerDisplay = Number(ethers.formatUnits(routerAllowance, state.assetDecimals));
     setRouterApprovalText(routerDisplay.toFixed(2));
+    const swapAllowance = await state.asset.allowance(state.addr, state.swapAddress || state.vaultAddress);
+    state.swapAllowance = swapAllowance;
   } catch (e) {
     console.error(e);
     setApprovalText("?");
@@ -379,6 +530,7 @@ $("swapBtn").onclick = swap;
 $("amount").oninput = quote;
 $("amountUsdc").oninput = quoteUsdc;
 $("swapUsdcBtn").onclick = swapUsdc;
+$("openPositionBtn").onclick = openPosition;
 
 function updateSwapState() {
   const connected = Boolean(state.signer);
@@ -394,6 +546,44 @@ function updateSwapUsdcState() {
 function updatePoolState() {
   const connected = Boolean(state.signer);
   setPoolDisabled(!(connected && isDepositValid()), !(connected && isWithdrawValid()));
+}
+
+function updatePositionState() {
+  const connected = Boolean(state.signer);
+  setOpenPositionDisabled(!(connected && isPositionValid()));
+  setPositionQuote("–");
+}
+
+async function quotePosition() {
+  const val = $("positionAmount").value;
+  if (!val || isNaN(val) || Number(val) <= 0) {
+    setPositionQuote("–");
+    $("positionBorrow").textContent = "–";
+    setPositionRate("–");
+    return;
+  }
+  if (!state.router || !state.assetAddress || !state.targetTokenAddress) {
+    setPositionQuote("–");
+    $("positionBorrow").textContent = "–";
+    setPositionRate("–");
+    return;
+  }
+  try {
+    const amountIn = ethers.parseUnits(val.toString(), state.assetDecimals);
+    const amounts = await state.router.getAmountsOut(amountIn * 2n, [state.assetAddress, state.targetTokenAddress]);
+    const out = amounts[1];
+    const outFormatted = ethers.formatUnits(out, state.targetDecimals);
+    setPositionQuote(outFormatted);
+    $("positionBorrow").textContent = ethers.formatUnits(amountIn, state.assetDecimals);
+    // rate: asset per target
+    const rate = Number(val) / Number(outFormatted || 1);
+    setPositionRate(`${rate.toFixed(6)} asset/target`);
+  } catch (e) {
+    console.error(e);
+    setPositionQuote("Error");
+    $("positionBorrow").textContent = "Error";
+    setPositionRate("Error");
+  }
 }
 
 async function loadConfig() {
@@ -425,6 +615,10 @@ $("withdrawAmount").oninput = () => {
 $("amountUsdc").oninput = () => {
   updateSwapUsdcState();
 };
+$("positionAmount").oninput = () => {
+  updatePositionState();
+  quotePosition();
+};
 
 async function depositPool() {
   if (!state.signer) {
@@ -455,6 +649,7 @@ async function depositPool() {
     setPoolStatus("Deposit confirmed");
     await refreshBalances();
     await refreshAllowance();
+    await refreshPoolInfo();
   } catch (e) {
     console.error(e);
     setPoolStatus(e.reason || e.message || "Deposit failed");
@@ -488,6 +683,7 @@ async function withdrawPool() {
     setPoolStatus("Redemption confirmed");
     await refreshBalances();
     await refreshAllowance();
+    await refreshPoolInfo();
   } catch (e) {
     console.error(e);
     setPoolStatus(e.reason || e.message || "Withdraw failed");
@@ -504,7 +700,7 @@ async function approveRouter() {
   }
   try {
     setSwapUsdcStatus("Approving router...");
-    const tx = await state.usdc.connect(state.signer).approve(UNISWAP_V2_ROUTER, ethers.MaxUint256);
+    const tx = await state.asset.connect(state.signer).approve(UNISWAP_V2_ROUTER, ethers.MaxUint256);
     setSwapUsdcStatus("Pending… " + tx.hash);
     await tx.wait();
     setSwapUsdcStatus("Router approved");
@@ -534,3 +730,64 @@ async function ensureVaultApproval(amount) {
     return false;
   }
 }
+
+async function ensureSwapApproval(amount) {
+  try {
+    const current = await state.asset.allowance(state.addr, state.swapAddress || state.vaultAddress);
+    if (current >= amount) return true;
+    setPositionStatus("Approving X2Swap...");
+    const tx = await state.asset.connect(state.signer).approve(state.swapAddress || state.vaultAddress, ethers.MaxUint256);
+    setPositionStatus("Pending… " + tx.hash);
+    await tx.wait();
+    await refreshAllowance();
+    return true;
+  } catch (e) {
+    console.error(e);
+    setPositionStatus(e.reason || e.message || "Swap approve failed");
+    return false;
+  }
+}
+
+async function openPosition() {
+  if (!state.signer) {
+    await connect();
+    if (!state.signer) return;
+  }
+  if (!state.swapAddress) {
+    return setPositionStatus("Swap not configured");
+  }
+  const val = $("positionAmount").value;
+  if (!val || isNaN(val) || Number(val) <= 0) {
+    return setPositionStatus("Enter position amount");
+  }
+  if (state.poolAvailable && ethers.parseUnits(val.toString(), state.assetDecimals) > state.poolAvailable) {
+    return setPositionStatus("Insufficient pool liquidity");
+  }
+  let amount;
+  try {
+    amount = ethers.parseUnits(val.toString(), state.assetDecimals);
+  } catch (e) {
+    console.error(e);
+    return setPositionStatus("Invalid amount");
+  }
+  const ok = await ensureSwapApproval(amount);
+  if (!ok) return;
+  try {
+    setPositionStatus("Opening position...");
+    const tx = await state.swap.openPosition(amount, { gasLimit: 900000n });
+    setPositionStatus("Pending… " + tx.hash);
+    await tx.wait();
+    setPositionStatus("Position opened");
+    await refreshBalances();
+    await refreshAllowance();
+    await refreshPoolInfo();
+    await refreshPositions();
+  } catch (e) {
+    console.error(e);
+    console.log(e.errorName, e.errorArgs);
+    console.log(e.shortMessage || e.reason || e.message);
+    setPositionStatus(e.reason || e.message || "Open position failed");
+  }
+}
+
+$("openPositionBtn").onclick = openPosition;

@@ -3,9 +3,10 @@ pragma solidity ^0.8.20;
 
 import {ISwapRouter} from "./interfaces/ISwapRouter.sol";
 import {IERC20} from "./interfaces/IERC20.sol";
+import "hardhat/console.sol";
 
 /// @notice Minimal Uniswap V2 router adapter implementing ISwapRouter for a fixed token0/token1 pair.
-contract UniswapRouter is ISwapRouter {
+contract X2UniswapRouter is ISwapRouter {
     address public immutable token0;
     address public immutable token1;
     address public immutable uniV2Router;
@@ -25,12 +26,16 @@ contract UniswapRouter is ISwapRouter {
     }
 
     function swap(address tokenIn, uint256 amountIn, uint256 minAmountOut) external override returns (uint256 amountOut) {
+        console.log("Swap start");
         address[] memory path = _buildPath(tokenIn);
 
+        console.log("Path: ok");
         // pull tokens in
         require(IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn), "Pull failed");
+        console.log("transferFrom passed");
         // approve router if needed
         _ensureApproval(tokenIn, amountIn);
+        console.log("approval passed");
 
         uint256[] memory amounts = IUniV2Router(uniV2Router).swapExactTokensForTokens(
             amountIn,
