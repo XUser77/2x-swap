@@ -14,16 +14,20 @@ contract X2Pool is IERC4626 {
 
     IERC20 public immutable underlying;
     IERC20 public immutable targetToken;
+    address public immutable x2swap;
+    uint256 public totalDebt;
 
     uint256 public totalSupply;
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
 
-    constructor(address asset_, address targetToken_, string memory name_, string memory symbol_) {
+    constructor(address asset_, address targetToken_, address x2swap_, string memory name_, string memory symbol_) {
         require(asset_ != address(0), "Asset required");
         require(targetToken_ != address(0), "Target token required");
+        require(x2swap_ != address(0), "Swap required");
         underlying = IERC20(asset_);
         targetToken = IERC20(targetToken_);
+        x2swap = x2swap_;
         decimals = underlying.decimals();
         name = name_;
         symbol = symbol_;
@@ -153,6 +157,19 @@ contract X2Pool is IERC4626 {
         _burn(owner, shares);
         require(underlying.transfer(receiver, assets), "Asset transfer failed");
         emit Withdraw(msg.sender, receiver, owner, assets, shares);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            X2SWAP ACTIONS
+    //////////////////////////////////////////////////////////////*/
+
+    /// @notice Borrow underlying to the linked X2Swap contract.
+    /// @dev Only callable by the configured X2Swap.
+    function borrow(uint256 amount) external {
+        require(msg.sender == x2swap, "Not swap");
+        require(amount > 0, "Zero amount");
+        totalDebt += amount;
+        require(underlying.transfer(msg.sender, amount), "Transfer failed");
     }
 
     /*//////////////////////////////////////////////////////////////

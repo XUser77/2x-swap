@@ -11,7 +11,8 @@ const hre = require("hardhat");
 
 async function main() {
   const asset = process.env.ASSET || "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"; // USDC mainnet
-  const targetToken = process.env.ASSET || "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"; // WETH mainnet
+  const targetToken = process.env.TARGET_TOKEN || "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"; // WETH mainnet
+  const router = process.env.ROUTER || "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"; // Uniswap V2
   const name = process.env.TOKEN_NAME || "ETH-USDC X2 Pool";
   const symbol = process.env.TOKEN_SYMBOL || "2xETHxUSDC";
 
@@ -20,7 +21,7 @@ async function main() {
   console.log(`Asset: ${asset}`);
 
   const Swap = await hre.ethers.getContractFactory("X2Swap");
-  const swap = await Swap.deploy(asset, targetToken, name, symbol);
+  const swap = await Swap.deploy(asset, targetToken, router, name, symbol);
   await swap.waitForDeployment();
   const pool = await swap.pool();
 
