@@ -172,6 +172,16 @@ contract X2Pool is IERC4626 {
         require(underlying.transfer(msg.sender, amount), "Transfer failed");
     }
 
+    /// @notice Repay borrowed underlying. Caller must transfer tokens and specify how much debt to clear.
+    /// @dev Amount of tokens returned and amount of debt cleared can differ (e.g., accounting for losses).
+    function returnBorrow(uint256 amount, uint256 debtRepaid) external {
+        require(msg.sender == x2swap, "Not swap");
+        require(amount > 0, "Zero amount");
+        require(debtRepaid <= totalDebt, "Exceeds debt");
+        require(underlying.transferFrom(msg.sender, address(this), amount), "Transfer failed");
+        totalDebt -= debtRepaid;
+    }
+
     /*//////////////////////////////////////////////////////////////
                           INTERNAL HELPERS
     //////////////////////////////////////////////////////////////*/

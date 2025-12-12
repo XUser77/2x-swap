@@ -16,8 +16,10 @@ const swapAbi = [
   "function targetToken() view returns (address)",
   "function positionDuration() view returns (uint256)",
   "function openPosition(uint256 assetAmount) returns (uint256)",
-  "function getPositionsOf(address) view returns (uint256[] memory)",
-  "function positions(uint256) view returns (uint256,address,uint256,uint256,uint256,uint256,uint256,uint256,uint256)"
+   "function closePosition(uint256 id)",
+   "function getPositionsOf(address) view returns (uint256[] memory)",
+  "function positions(uint256) view returns (uint256,address,uint256,uint256,uint256,uint256,uint256,uint256,uint256)",
+  "function checkPosition(uint256) view returns (int256 profit, uint256 borrowerAmount, uint256 poolAmount, uint256 assetAmountOut)"
 ];
 
 const erc20Abi = [
@@ -109,6 +111,10 @@ const setPositionRate = (msg) => {
   const el = $("positionRate");
   if (el) el.textContent = msg;
 };
+const setPositionsStatus = (msg) => {
+  const el = $("positionsStatus");
+  if (el) el.innerHTML = `<span>${msg}</span>`;
+};
 const setShareLabel = (txt) => {
   const el = $("shareLabel");
   if (el) el.textContent = txt || "Pool Token";
@@ -138,14 +144,38 @@ const renderPositions = () => {
       const targetAmt = ethers.formatUnits(p.targetAmount, state.targetDecimals);
       const status = p.closeDate > 0 ? "Closed" : "Open";
       const openDate = p.openDate ? new Date(Number(p.openDate) * 1000).toLocaleString() : "-";
-      return `<div class="balance-row" style="margin-bottom:6px;">
+      let body = `<div class="balance-row" style="margin-bottom:6px;">
         <div class="balance-label">#${p.id} ${status}</div>
-        <div class="balance-value">${openAmt} → ${targetAmt}</div>
+        <div class="balance-value">${openAmt} asset → ${targetAmt} target</div>
       </div>
-      <div class="muted" style="font-size:12px;margin:4px 0 10px;">Opened: ${openDate}</div>`;
+      <div class="muted" style="font-size:12px;margin:4px 0;">Opened: ${openDate}</div>`;
+
+      if (p.closeDate > 0) {
+        const closeAmt = ethers.formatUnits(p.closeAssetAmount, state.assetDecimals);
+        body += `<div class="muted" style="font-size:12px;margin:0 0 10px;">Closed for ${closeAmt} asset</div>`;
+      } else {
+        if (typeof p.assetAmountOut !== "undefined") {
+          const assetOut = ethers.formatUnits(p.assetAmountOut, state.assetDecimals);
+          const borrowerAmt = ethers.formatUnits(p.borrowerAmount || 0n, state.assetDecimals);
+          const poolAmt = ethers.formatUnits(p.poolAmount || 0n, state.assetDecimals);
+          const profitNum = Number(ethers.formatUnits(p.profit || 0n, state.assetDecimals));
+          const profitLabel = profitNum >= 0 ? `+${profitNum.toFixed(4)}` : profitNum.toFixed(4);
+          body += `<div class="muted" style="font-size:12px;">Est. close: ${assetOut} asset</div>
+          <div class="muted" style="font-size:12px;">Pool: ${poolAmt} • You: ${borrowerAmt}</div>
+          <div class="muted" style="font-size:12px;margin-bottom:8px;">P/L: ${profitLabel}</div>`;
+        }
+        body += `<button class="close-btn" data-pos="${p.id}">Close</button>`;
+      }
+      return `<div class="panel" style="margin-bottom:10px;padding:10px;">${body}</div>`;
     })
     .join("");
   el.innerHTML = rows;
+  document.querySelectorAll(".close-btn").forEach((btn) => {
+    btn.onclick = async () => {
+      const id = Number(btn.dataset.pos);
+      await handleClosePosition(id);
+    };
+  });
 };
 const setPositionDuration = (txt) => {
   const el = $("positionDuration");
@@ -341,7 +371,7 @@ async function refreshPositions() {
     for (const id of ids) {
       try {
         const pos = await state.swap.positions(id);
-        fetched.push({
+        const position = {
           id: Number(pos[0]),
           sender: pos[1],
           openAssetAmount: pos[2],
@@ -351,7 +381,19 @@ async function refreshPositions() {
           profitSharing: pos[6],
           closeDate: pos[7],
           closeAssetAmount: pos[8]
-        });
+        };
+        if (position.closeDate === 0n) {
+          try {
+            const [profit, borrowerAmount, poolAmount, assetAmountOut] = await state.swap.checkPosition(id);
+            position.profit = profit;
+            position.borrowerAmount = borrowerAmount;
+            position.poolAmount = poolAmount;
+            position.assetAmountOut = assetAmountOut;
+          } catch (e) {
+            console.error("checkPosition failed", e);
+          }
+        }
+        fetched.push(position);
       } catch (e) {
         console.error("Position fetch failed", e);
       }
@@ -791,3 +833,26 @@ async function openPosition() {
 }
 
 $("openPositionBtn").onclick = openPosition;
+
+async function handleClosePosition(id) {
+  if (!state.signer) {
+    await connect();
+    if (!state.signer) return;
+  }
+  if (!state.swap) {
+    return setPositionsStatus("Swap not loaded");
+  }
+  try {
+    setPositionsStatus(`Closing #${id}...`);
+    const tx = await state.swap.closePosition(id, { gasLimit: 900000n });
+    setPositionsStatus("Pending… " + tx.hash);
+    await tx.wait();
+    setPositionsStatus("Closed");
+    await refreshBalances();
+    await refreshPoolInfo();
+    await refreshPositions();
+  } catch (e) {
+    console.error(e);
+    setPositionsStatus(e.reason || e.message || "Close failed");
+  }
+}

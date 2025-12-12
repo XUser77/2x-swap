@@ -51,6 +51,7 @@ contract X2Swap {
         uint256 amountOut = swapRouter.swap(address(asset), totalAmount, expectedOut);
         require(amountOut >= expectedOut, "Swap slippage");
 
+        uint256 profitSharing = currentProfitSharing();
         id = nextPositionId++;
         Position memory p = Position({
             id: id,
@@ -59,7 +60,7 @@ contract X2Swap {
             targetAmount: amountOut,
             openDate: block.timestamp,
             expireDate: block.timestamp + positionDuration,
-            profitSharing: 0,
+            profitSharing: profitSharing,
             closeDate: 0,
             closeAssetAmount: 0
         });
@@ -72,12 +73,107 @@ contract X2Swap {
         Position memory p = positions[id];
         require(p.sender == msg.sender, "Not owner");
 
+        require(p.closeDate == 0, "Already closed");
+
+        // Swap target back to asset
+        uint256 amountIn = p.targetAmount;
+        uint256 minOut = swapRouter.getAmountOut(address(targetToken), amountIn);
+        require(minOut > 0, "No output");
+
+        uint256 currentAllowance = targetToken.allowance(address(this), address(swapRouter));
+        if (currentAllowance < amountIn) {
+            targetToken.approve(address(swapRouter), type(uint256).max);
+        }
+        uint256 assetAmountOut = swapRouter.swap(address(targetToken), amountIn, minOut);
+
+        uint256 poolPrincipal = p.openAssetAmount / 2;
+        int256 profit = int256(assetAmountOut) - int256(p.openAssetAmount);
+
+        uint256 poolAmount;
+        uint256 borrowerAmount;
+        if (profit >= 0) {
+            uint256 profitUint = uint256(profit);
+            uint256 poolBonus = (profitUint * p.profitSharing) / 100;
+            poolAmount = poolPrincipal + poolBonus;
+            borrowerAmount = assetAmountOut - poolAmount;
+        } else {
+            if (assetAmountOut >= poolPrincipal) {
+                poolAmount = poolPrincipal;
+                borrowerAmount = assetAmountOut - poolPrincipal;
+            } else {
+                poolAmount = assetAmountOut;
+                borrowerAmount = 0;
+            }
+        }
+
+        if (poolAmount > 0) {
+            uint256 poolAllowance = asset.allowance(address(this), address(pool));
+            if (poolAllowance < poolAmount) {
+                asset.approve(address(pool), type(uint256).max);
+            }
+            pool.returnBorrow(poolAmount, poolPrincipal);
+        }
+
+        if (borrowerAmount > 0) {
+            require(asset.transfer(msg.sender, borrowerAmount), "Borrower transfer failed");
+        }
+
         positions[id].closeDate = block.timestamp;
-        positions[id].closeAssetAmount = positions[id].openAssetAmount; // mock close value
-        emit ClosePosition(id, positions[id].closeAssetAmount);
+        positions[id].closeAssetAmount = assetAmountOut;
+        emit ClosePosition(id, assetAmountOut);
+    }
+
+    /// @notice Returns profit sharing percentage (20% to 50%) based on pool debt ratio.
+    /// More debt relative to assets increases the profit sharing.
+    function currentProfitSharing() public view returns (uint256) {
+        uint256 assets = pool.totalAssets();
+        uint256 debt = pool.totalDebt();
+        if (assets == 0) return 50; // max if no assets to back debt
+
+        // ratio in 1e18 precision: debt / assets
+        uint256 ratio = (debt * 1e18) / assets;
+        uint256 minPct = 20;
+        uint256 maxPct = 50;
+        uint256 span = maxPct - minPct;
+
+        // Linear interpolation, clamped to maxBps
+        uint256 variablePart = (span * ratio) / 1e18;
+        uint256 sharing = minPct + variablePart;
+        if (sharing > maxPct) sharing = maxPct;
+        return sharing;
     }
 
     function getPositionsOf(address owner) external view returns (uint256[] memory) {
         return positionsOf[owner];
+    }
+
+    /// @notice Simulate closing a position by estimating proceeds and their split between borrower and pool.
+    /// @return profit signed profit/loss relative to total assets put into the position
+    /// @return borrowerAmount amount the borrower would receive
+    /// @return poolAmount amount the pool would receive
+    /// @return assetAmountOut estimated amount after swapping target back to asset
+    function checkPosition(uint256 id) external view returns (int256 profit, uint256 borrowerAmount, uint256 poolAmount, uint256 assetAmountOut) {
+        Position memory p = positions[id];
+        require(p.openDate != 0, "Position not found");
+        assetAmountOut = swapRouter.getAmountOut(address(targetToken), p.targetAmount);
+
+        uint256 poolPrincipal = p.openAssetAmount / 2;
+
+        profit = int256(assetAmountOut) - int256(p.openAssetAmount);
+
+        if (profit >= 0) {
+            uint256 profitUint = uint256(profit);
+            uint256 poolBonus = (profitUint * p.profitSharing) / 100;
+            poolAmount = poolPrincipal + poolBonus;
+            borrowerAmount = assetAmountOut - poolAmount;
+        } else {
+            if (assetAmountOut >= poolPrincipal) {
+                poolAmount = poolPrincipal;
+                borrowerAmount = assetAmountOut - poolPrincipal;
+            } else {
+                poolAmount = assetAmountOut;
+                borrowerAmount = 0;
+            }
+        }
     }
 }
