@@ -16,10 +16,11 @@ const swapAbi = [
   "function targetToken() view returns (address)",
   "function positionDuration() view returns (uint256)",
   "function openPosition(uint256 assetAmount) returns (uint256)",
-   "function closePosition(uint256 id)",
-   "function getPositionsOf(address) view returns (uint256[] memory)",
+  "function closePosition(uint256 id)",
+  "function getPositionsOf(address) view returns (uint256[] memory)",
   "function positions(uint256) view returns (uint256,address,uint256,uint256,uint256,uint256,uint256,uint256,uint256)",
-  "function checkPosition(uint256) view returns (int256 profit, uint256 borrowerAmount, uint256 poolAmount, uint256 assetAmountOut)"
+  "function checkPosition(uint256) view returns (int256 profit, uint256 borrowerAmount, uint256 poolAmount, uint256 assetAmountOut)",
+  "function targetRate() view returns (uint256)"
 ];
 
 const erc20Abi = [

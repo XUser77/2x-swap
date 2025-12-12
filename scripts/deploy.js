@@ -13,6 +13,7 @@ async function main() {
   const asset = process.env.ASSET || "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"; // USDC mainnet
   const targetToken = process.env.TARGET_TOKEN || "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"; // WETH mainnet
   const uniswapRouter = process.env.ROUTER || "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"; // Uniswap V2
+  const priceOracle = process.env.PRICE_ORACLE || ""; // optional override
   const name = process.env.TOKEN_NAME || "ETH-USDC X2 Pool";
   const symbol = process.env.TOKEN_SYMBOL || "2xETHxUSDC";
   const positionDuration = process.env.POSITION_DURATION
@@ -26,8 +27,19 @@ async function main() {
   const X2UniswapRouter = await hre.ethers.getContractFactory("X2UniswapRouter");
   const x2uniswapRouter = await X2UniswapRouter.deploy(asset, targetToken, uniswapRouter);
 
+  let oracleAddr = priceOracle;
+  if (!oracleAddr) {
+    const FakeOracle = await hre.ethers.getContractFactory("FakeOracle");
+    const fakeOracle = await FakeOracle.deploy(uniswapRouter, asset, targetToken);
+    await fakeOracle.waitForDeployment();
+    oracleAddr = fakeOracle.target;
+    console.log(`FakeOracle deployed to: ${oracleAddr}`);
+  } else {
+    console.log(`Using PRICE_ORACLE: ${oracleAddr}`);
+  }
+
   const X2Swap = await hre.ethers.getContractFactory("X2Swap");
-  const x2swap = await X2Swap.deploy(asset, targetToken, x2uniswapRouter.target, name, symbol, positionDuration);
+  const x2swap = await X2Swap.deploy(asset, targetToken, x2uniswapRouter.target, oracleAddr, name, symbol, positionDuration);
   await x2swap.waitForDeployment();
   const pool = await x2swap.pool();
 

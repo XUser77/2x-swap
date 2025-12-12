@@ -5,6 +5,7 @@ import {X2Pool} from "./X2Pool.sol";
 import {IERC20} from "./interfaces/IERC20.sol";
 import {Position} from "./structs/Position.sol";
 import {ISwapRouter} from "./interfaces/ISwapRouter.sol";
+import {IPriceOracle} from "./interfaces/IPriceOracle.sol";
 
 /// @title X2Swap - factory wrapper that deploys an X2Pool
 /// @notice Deploys a fresh X2Pool in the constructor and exposes its address.
@@ -13,6 +14,11 @@ contract X2Swap {
     IERC20 public immutable asset;
     IERC20 public immutable targetToken;
     uint256 public immutable positionDuration;
+    uint8 public immutable assetDecimals;
+    uint8 public immutable targetDecimals;
+    IPriceOracle public immutable priceOracle;
+
+    uint256 public constant ORACLE_MAX_DEVIATION_BPS = 500; // 5%
 
     uint256 public nextPositionId;
     mapping(uint256 => Position) public positions;
@@ -23,11 +29,23 @@ contract X2Swap {
     event OpenPosition(uint256 indexed id, address indexed sender, uint256 assetAmount, uint256 targetAmount, uint256 profitSharing);
     event ClosePosition(uint256 indexed id, uint256 closeAssetAmount);
 
-    constructor(address asset_, address targetToken_, address swapRouter_, string memory lpTokenName, string memory lpTokenSymbol, uint256 positionDuration_) {
+    constructor(
+        address asset_,
+        address targetToken_,
+        address swapRouter_,
+        address priceOracle_,
+        string memory lpTokenName,
+        string memory lpTokenSymbol,
+        uint256 positionDuration_
+    ) {
+        require(priceOracle_ != address(0), "Oracle required");
         pool = new X2Pool(asset_, targetToken_, address(this), lpTokenName, lpTokenSymbol);
         asset = IERC20(asset_);
+        assetDecimals = IERC20(asset_).decimals();
         targetToken = IERC20(targetToken_);
+        targetDecimals = IERC20(targetToken_).decimals();
         swapRouter = ISwapRouter(swapRouter_);
+        priceOracle = IPriceOracle(priceOracle_);
         positionDuration = positionDuration_;
     }
 
@@ -43,6 +61,8 @@ contract X2Swap {
         // Swap combined amount to target token (assumes allowance to router via pool -> swap)
         uint256 expectedOut = swapRouter.getAmountOut(address(asset), totalAmount);
         require(expectedOut > 0, "No output");
+        uint256 oracleMinTargetOut = _oracleMinTargetOut(totalAmount);
+        require(expectedOut >= oracleMinTargetOut, "Oracle deviation");
 
         uint256 currentAllowance = asset.allowance(address(this), address(swapRouter));
         if (currentAllowance < totalAmount) {
@@ -79,6 +99,8 @@ contract X2Swap {
         uint256 amountIn = p.targetAmount;
         uint256 minOut = swapRouter.getAmountOut(address(targetToken), amountIn);
         require(minOut > 0, "No output");
+        uint256 oracleMinAssetOut = _oracleMinAssetOut(amountIn);
+        require(minOut >= oracleMinAssetOut, "Oracle deviation");
 
         uint256 currentAllowance = targetToken.allowance(address(this), address(swapRouter));
         if (currentAllowance < amountIn) {
@@ -123,28 +145,56 @@ contract X2Swap {
         emit ClosePosition(id, assetAmountOut);
     }
 
-    /// @notice Returns profit sharing percentage (20% to 50%) based on pool debt ratio.
-    /// More debt relative to assets increases the profit sharing.
+    /// @notice Returns pool profit share percentage based on pool utilization U = debt / (assets + debt).
+    /// Threshold Model v2:
+    /// 0–90%: 20%, 90–92%: 30%, 92–94%: 40%, >94%: 50%
     function currentProfitSharing() public view returns (uint256) {
         uint256 assets = pool.totalAssets();
         uint256 debt = pool.totalDebt();
-        if (assets == 0) return 50; // max if no assets to back debt
+        uint256 total = assets + debt;
+        if (total == 0) return 20;
+        uint256 utilizationBps = (debt * 10_000) / total;
 
-        // ratio in 1e18 precision: debt / assets
-        uint256 ratio = (debt * 1e18) / assets;
-        uint256 minPct = 20;
-        uint256 maxPct = 50;
-        uint256 span = maxPct - minPct;
-
-        // Linear interpolation, clamped to maxBps
-        uint256 variablePart = (span * ratio) / 1e18;
-        uint256 sharing = minPct + variablePart;
-        if (sharing > maxPct) sharing = maxPct;
-        return sharing;
+        if (utilizationBps <= 9000) return 20;
+        if (utilizationBps <= 9200) return 30;
+        if (utilizationBps <= 9400) return 40;
+        return 50;
     }
 
     function getPositionsOf(address owner) external view returns (uint256[] memory) {
         return positionsOf[owner];
+    }
+
+    /// @notice Returns oracle price of target token denominated in asset units.
+    function targetRate() external view returns (uint256) {
+        return _oraclePriceAssetPerTarget();
+    }
+
+    function _oraclePriceAssetPerTarget() internal view returns (uint256) {
+        (, int256 answer,,,) = priceOracle.latestRoundData();
+        require(answer > 0, "Invalid oracle answer");
+        uint8 oracleDecimals = priceOracle.decimals();
+        uint256 price = uint256(answer);
+        if (oracleDecimals < assetDecimals) {
+            return price * 10 ** (assetDecimals - oracleDecimals);
+        } else if (oracleDecimals > assetDecimals) {
+            return price / 10 ** (oracleDecimals - assetDecimals);
+        }
+        return price;
+    }
+
+    function _oracleMinTargetOut(uint256 assetAmountIn) internal view returns (uint256) {
+        uint256 priceAssetPerTarget = _oraclePriceAssetPerTarget(); // asset units per 1 target token
+        require(priceAssetPerTarget > 0, "Oracle price 0");
+        uint256 targetOut = (assetAmountIn * (10 ** uint256(targetDecimals))) / priceAssetPerTarget;
+        return (targetOut * (10_000 - ORACLE_MAX_DEVIATION_BPS)) / 10_000;
+    }
+
+    function _oracleMinAssetOut(uint256 targetAmountIn) internal view returns (uint256) {
+        uint256 priceAssetPerTarget = _oraclePriceAssetPerTarget(); // asset units per 1 target token
+        require(priceAssetPerTarget > 0, "Oracle price 0");
+        uint256 assetOut = (targetAmountIn * priceAssetPerTarget) / (10 ** uint256(targetDecimals));
+        return (assetOut * (10_000 - ORACLE_MAX_DEVIATION_BPS)) / 10_000;
     }
 
     /// @notice Simulate closing a position by estimating proceeds and their split between borrower and pool.
