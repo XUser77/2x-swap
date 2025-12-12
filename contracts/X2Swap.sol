@@ -17,6 +17,10 @@ contract X2Swap {
     uint8 public immutable assetDecimals;
     uint8 public immutable targetDecimals;
     IPriceOracle public immutable priceOracle;
+    uint256 public immutable feeBps;
+    uint256 public feesAccrued;
+    address[] public feeWithdrawers;
+    mapping(address => bool) public isFeeWithdrawer;
 
     uint256 public constant ORACLE_MAX_DEVIATION_BPS = 500; // 5%
 
@@ -28,17 +32,22 @@ contract X2Swap {
 
     event OpenPosition(uint256 indexed id, address indexed sender, uint256 assetAmount, uint256 targetAmount, uint256 profitSharing);
     event ClosePosition(uint256 indexed id, uint256 closeAssetAmount);
+    event FeeWithdrawerUpdated(address indexed account, bool allowed);
+    event FeesWithdrawn(address indexed caller, address indexed to, uint256 amount);
 
     constructor(
         address asset_,
         address targetToken_,
         address swapRouter_,
         address priceOracle_,
+        uint256 feeBps_,
+        address[] memory feeWithdrawers_,
         string memory lpTokenName,
         string memory lpTokenSymbol,
         uint256 positionDuration_
     ) {
         require(priceOracle_ != address(0), "Oracle required");
+        require(feeBps_ <= 10_000, "Bad fee");
         pool = new X2Pool(asset_, targetToken_, address(this), lpTokenName, lpTokenSymbol);
         asset = IERC20(asset_);
         assetDecimals = IERC20(asset_).decimals();
@@ -46,17 +55,32 @@ contract X2Swap {
         targetDecimals = IERC20(targetToken_).decimals();
         swapRouter = ISwapRouter(swapRouter_);
         priceOracle = IPriceOracle(priceOracle_);
+        feeBps = feeBps_;
         positionDuration = positionDuration_;
+
+        for (uint256 i = 0; i < feeWithdrawers_.length; i++) {
+            address w = feeWithdrawers_[i];
+            require(w != address(0), "Bad withdrawer");
+            if (!isFeeWithdrawer[w]) {
+                isFeeWithdrawer[w] = true;
+                feeWithdrawers.push(w);
+                emit FeeWithdrawerUpdated(w, true);
+            }
+        }
     }
 
     function openPosition(uint256 assetAmount) external returns (uint256 id) {
         require(assetAmount > 0, "Zero amount");
-        // pull tokens from user
+        // pull tokens from user, take opening fee
         require(asset.transferFrom(msg.sender, address(this), assetAmount), "Transfer failed");
-        // Borrow the same amount from the pool to this swap
-        pool.borrow(assetAmount);
+        uint256 openFee = (assetAmount * feeBps) / 10_000;
+        feesAccrued += openFee;
+        uint256 netUserAmount = assetAmount - openFee;
 
-        uint256 totalAmount = assetAmount * 2;
+        // Borrow the same amount (net) from the pool to this swap
+        pool.borrow(netUserAmount);
+
+        uint256 totalAmount = netUserAmount * 2;
 
         // Swap combined amount to target token (assumes allowance to router via pool -> swap)
         uint256 expectedOut = swapRouter.getAmountOut(address(asset), totalAmount);
@@ -107,42 +131,28 @@ contract X2Swap {
             targetToken.approve(address(swapRouter), type(uint256).max);
         }
         uint256 assetAmountOut = swapRouter.swap(address(targetToken), amountIn, minOut);
-
+        (uint256 poolAmount, uint256 borrowerGross) = _splitClose(p.openAssetAmount, assetAmountOut, p.profitSharing);
         uint256 poolPrincipal = p.openAssetAmount / 2;
-        int256 profit = int256(assetAmountOut) - int256(p.openAssetAmount);
 
-        uint256 poolAmount;
-        uint256 borrowerAmount;
-        if (profit >= 0) {
-            uint256 profitUint = uint256(profit);
-            uint256 poolBonus = (profitUint * p.profitSharing) / 100;
-            poolAmount = poolPrincipal + poolBonus;
-            borrowerAmount = assetAmountOut - poolAmount;
-        } else {
-            if (assetAmountOut >= poolPrincipal) {
-                poolAmount = poolPrincipal;
-                borrowerAmount = assetAmountOut - poolPrincipal;
-            } else {
-                poolAmount = assetAmountOut;
-                borrowerAmount = 0;
-            }
+        // Fee is charged from borrower side only
+        uint256 borrowerFee = (borrowerGross * feeBps) / 10_000;
+        feesAccrued += borrowerFee;
+        uint256 borrowerNet = borrowerGross - borrowerFee;
+
+        // Return funds to pool first (pool side not charged a fee); always clear the full borrowed principal.
+        uint256 poolAllowance = asset.allowance(address(this), address(pool));
+        if (poolAllowance < poolAmount) {
+            asset.approve(address(pool), type(uint256).max);
         }
+        pool.returnBorrow(poolAmount, poolPrincipal);
 
-        if (poolAmount > 0) {
-            uint256 poolAllowance = asset.allowance(address(this), address(pool));
-            if (poolAllowance < poolAmount) {
-                asset.approve(address(pool), type(uint256).max);
-            }
-            pool.returnBorrow(poolAmount, poolPrincipal);
-        }
-
-        if (borrowerAmount > 0) {
-            require(asset.transfer(msg.sender, borrowerAmount), "Borrower transfer failed");
+        if (borrowerNet > 0) {
+            require(asset.transfer(msg.sender, borrowerNet), "Borrower transfer failed");
         }
 
         positions[id].closeDate = block.timestamp;
-        positions[id].closeAssetAmount = assetAmountOut;
-        emit ClosePosition(id, assetAmountOut);
+        positions[id].closeAssetAmount = borrowerNet;
+        emit ClosePosition(id, borrowerNet);
     }
 
     /// @notice Returns pool profit share percentage based on pool utilization U = debt / (assets + debt).
@@ -197,33 +207,65 @@ contract X2Swap {
         return (assetOut * (10_000 - ORACLE_MAX_DEVIATION_BPS)) / 10_000;
     }
 
+    function feeWithdrawersCount() external view returns (uint256) {
+        return feeWithdrawers.length;
+    }
+
+    /// @notice Withdraw accrued fees (denominated in the asset token).
+    /// @param to Recipient of the withdrawn fees.
+    /// @param amount Amount to withdraw; if 0, withdraws all accrued fees.
+    function withdrawFees(address to, uint256 amount) external returns (uint256 withdrawn) {
+        require(isFeeWithdrawer[msg.sender], "Not allowed");
+        require(to != address(0), "Bad recipient");
+        withdrawn = amount == 0 ? feesAccrued : amount;
+        require(withdrawn <= feesAccrued, "Exceeds fees");
+        feesAccrued -= withdrawn;
+        require(asset.transfer(to, withdrawn), "Fee transfer failed");
+        emit FeesWithdrawn(msg.sender, to, withdrawn);
+    }
+
+    function _splitClose(uint256 openAssetAmount, uint256 assetAmountOut, uint256 profitSharing)
+        internal
+        pure
+        returns (uint256 poolAmount, uint256 borrowerGross)
+    {
+        uint256 poolPrincipal = openAssetAmount / 2;
+
+        if (assetAmountOut >= openAssetAmount) {
+            uint256 profitUint = assetAmountOut - openAssetAmount;
+            uint256 poolBonus = (profitUint * profitSharing) / 100;
+            poolAmount = poolPrincipal + poolBonus;
+            borrowerGross = assetAmountOut - poolAmount;
+        } else {
+            if (assetAmountOut >= poolPrincipal) {
+                poolAmount = poolPrincipal;
+                borrowerGross = assetAmountOut - poolPrincipal;
+            } else {
+                poolAmount = assetAmountOut;
+                borrowerGross = 0;
+            }
+        }
+    }
+
     /// @notice Simulate closing a position by estimating proceeds and their split between borrower and pool.
     /// @return profit signed profit/loss relative to total assets put into the position
     /// @return borrowerAmount amount the borrower would receive
     /// @return poolAmount amount the pool would receive
-    /// @return assetAmountOut estimated amount after swapping target back to asset
-    function checkPosition(uint256 id) external view returns (int256 profit, uint256 borrowerAmount, uint256 poolAmount, uint256 assetAmountOut) {
+    /// @return feeAmount fee charged from borrower side
+    /// @return assetAmountOut estimated amount after swapping target back to asset (before borrower fee)
+    function checkPosition(uint256 id)
+        external
+        view
+        returns (int256 profit, uint256 borrowerAmount, uint256 poolAmount, uint256 feeAmount, uint256 assetAmountOut)
+    {
         Position memory p = positions[id];
         require(p.openDate != 0, "Position not found");
         assetAmountOut = swapRouter.getAmountOut(address(targetToken), p.targetAmount);
 
-        uint256 poolPrincipal = p.openAssetAmount / 2;
-
         profit = int256(assetAmountOut) - int256(p.openAssetAmount);
-
-        if (profit >= 0) {
-            uint256 profitUint = uint256(profit);
-            uint256 poolBonus = (profitUint * p.profitSharing) / 100;
-            poolAmount = poolPrincipal + poolBonus;
-            borrowerAmount = assetAmountOut - poolAmount;
-        } else {
-            if (assetAmountOut >= poolPrincipal) {
-                poolAmount = poolPrincipal;
-                borrowerAmount = assetAmountOut - poolPrincipal;
-            } else {
-                poolAmount = assetAmountOut;
-                borrowerAmount = 0;
-            }
-        }
+        uint256 borrowerGross;
+        (poolAmount, borrowerGross) = _splitClose(p.openAssetAmount, assetAmountOut, p.profitSharing);
+        feeAmount = (borrowerGross * feeBps) / 10_000;
+        borrowerAmount = borrowerGross - feeAmount;
     }
 }

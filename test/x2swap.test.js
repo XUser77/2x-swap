@@ -65,7 +65,7 @@ describe("X2Pool/X2Swap flows", function () {
     const oracle = await FakeOracle.deploy(UNISWAP_V2_ROUTER, USDC, WETH);
 
     const X2Swap = await hre.ethers.getContractFactory("X2Swap", deployer);
-    const swap = await X2Swap.deploy(USDC, WETH, x2uniswap.target, oracle.target, "2x LP USDC-ETH", "2xUSDCxETH", 30n * 24n * 60n * 60n);
+    const swap = await X2Swap.deploy(USDC, WETH, x2uniswap.target, oracle.target, 0, [deployer.address], "2x LP USDC-ETH", "2xUSDCxETH", 30n * 24n * 60n * 60n);
     const poolAddr = await swap.pool();
     const pool = await hre.ethers.getContractAt("X2Pool", poolAddr, deployer);
 
@@ -99,7 +99,7 @@ describe("X2Pool/X2Swap flows", function () {
     const oracle = await FakeOracle.deploy(UNISWAP_V2_ROUTER, USDC, WETH);
 
     const X2Swap = await hre.ethers.getContractFactory("X2Swap", deployer);
-    const swap = await X2Swap.deploy(USDC, WETH, x2uniswap.target, oracle.target, "2x LP USDC-ETH", "2xUSDCxETH", 30n * 24n * 60n * 60n);
+    const swap = await X2Swap.deploy(USDC, WETH, x2uniswap.target, oracle.target, 0, [deployer.address], "2x LP USDC-ETH", "2xUSDCxETH", 30n * 24n * 60n * 60n);
     const poolAddr = await swap.pool();
     const pool = await hre.ethers.getContractAt("X2Pool", poolAddr, deployer);
 
@@ -137,7 +137,7 @@ describe("X2Pool/X2Swap flows", function () {
     const oracle = await FakeOracle.deploy(UNISWAP_V2_ROUTER, USDC, WETH);
 
     const X2Swap = await hre.ethers.getContractFactory("X2Swap", deployer);
-    const swap = await X2Swap.deploy(USDC, WETH, x2uniswap.target, oracle.target, "2x LP USDC-ETH", "2xUSDCxETH", 30n * 24n * 60n * 60n);
+    const swap = await X2Swap.deploy(USDC, WETH, x2uniswap.target, oracle.target, 0, [deployer.address], "2x LP USDC-ETH", "2xUSDCxETH", 30n * 24n * 60n * 60n);
     const poolAddr = await swap.pool();
     const pool = await hre.ethers.getContractAt("X2Pool", poolAddr, deployer);
 

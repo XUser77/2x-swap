@@ -14,6 +14,7 @@ async function main() {
   const targetToken = process.env.TARGET_TOKEN || "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"; // WETH mainnet
   const uniswapRouter = process.env.ROUTER || "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"; // Uniswap V2
   const priceOracle = process.env.PRICE_ORACLE || ""; // optional override
+  const feeBps = process.env.FEE_BPS ? BigInt(process.env.FEE_BPS) : 50n; // default 0.5%
   const name = process.env.TOKEN_NAME || "ETH-USDC X2 Pool";
   const symbol = process.env.TOKEN_SYMBOL || "2xETHxUSDC";
   const positionDuration = process.env.POSITION_DURATION
@@ -39,7 +40,10 @@ async function main() {
   }
 
   const X2Swap = await hre.ethers.getContractFactory("X2Swap");
-  const x2swap = await X2Swap.deploy(asset, targetToken, x2uniswapRouter.target, oracleAddr, name, symbol, positionDuration);
+  const feeWithdrawers = process.env.FEE_WITHDRAWERS
+    ? process.env.FEE_WITHDRAWERS.split(",").map((s) => s.trim()).filter(Boolean)
+    : [deployer.address];
+  const x2swap = await X2Swap.deploy(asset, targetToken, x2uniswapRouter.target, oracleAddr, feeBps, feeWithdrawers, name, symbol, positionDuration);
   await x2swap.waitForDeployment();
   const pool = await x2swap.pool();
 

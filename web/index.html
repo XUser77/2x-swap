@@ -126,6 +126,10 @@
       <div class="panel" style="margin-bottom:14px;">
         <div class="panel-header">Pool Availability</div>
         <div class="balance-row" style="margin-top:0;">
+          <div class="balance-label">Fee</div>
+          <div class="balance-value" id="feeBps">–</div>
+        </div>
+        <div class="balance-row" style="margin-top:0;">
           <div class="balance-label">Assets (incl. debt)</div>
           <div class="balance-value" id="poolAssets">–</div>
         </div>
@@ -146,6 +150,8 @@
 
       <div style="margin-top:10px;">
         <span class="muted">Borrow from pool: <span id="positionBorrow">–</span></span><br/>
+        <span class="muted">Open fee: <span id="positionFee">–</span></span><br/>
+        <span class="muted">Swap input (2x): <span id="positionSwapIn">–</span></span><br/>
         <span class="muted">Expected target out: <span id="positionQuote">–</span></span><br/>
         <span class="muted">Rate: <span id="positionRate">–</span></span>
         <br/>
@@ -166,6 +172,30 @@
         <div id="positionsList" class="muted" style="font-size:13px;">Connect wallet to load positions.</div>
       </div>
       <div class="status" id="positionsStatus"><span>Idle</span></div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin:0 0 6px;font-size:18px;">X2Swap Fees</h2>
+      <div class="panel" style="margin-bottom:14px;">
+        <div class="panel-header">Withdraw</div>
+        <div class="balance-row" style="margin-top:0;">
+          <div class="balance-label">Accrued</div>
+          <div class="balance-value" id="feesAccrued">–</div>
+        </div>
+        <div class="muted" id="feesAuth" style="font-size:12px;margin-top:6px;">–</div>
+        <div style="margin-top:10px;">
+          <label for="feesTo">Withdraw to</label>
+          <input id="feesTo" type="text" placeholder="0x..." />
+        </div>
+        <div style="margin-top:10px;">
+          <label for="feesAmount">Amount (optional, empty = all)</label>
+          <input id="feesAmount" type="number" step="0.0001" min="0" placeholder="0" />
+        </div>
+        <div style="margin-top:10px;" class="row">
+          <button id="withdrawFeesBtn" disabled>Withdraw Fees</button>
+        </div>
+        <div class="status" id="feesStatus"><span>Idle</span></div>
+      </div>
     </div>
   </div>
 
