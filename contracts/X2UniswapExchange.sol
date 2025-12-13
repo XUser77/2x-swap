@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {ISwapRouter} from "./interfaces/ISwapRouter.sol";
+import {IExchange} from "./interfaces/IExchange.sol";
 import {IERC20} from "./interfaces/IERC20.sol";
-import "hardhat/console.sol";
 
-/// @notice Minimal Uniswap V2 router adapter implementing ISwapRouter for a fixed token0/token1 pair.
-contract X2UniswapRouter is ISwapRouter {
+/// @notice Minimal Uniswap V2 router adapter implementing IExchange for a fixed token0/token1 pair.
+contract X2UniswapExchange is IExchange {
     address public immutable token0;
     address public immutable token1;
     address public immutable uniV2Router;

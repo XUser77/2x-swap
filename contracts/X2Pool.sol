@@ -13,7 +13,7 @@ contract X2Pool is IERC4626 {
     uint8 public immutable decimals;
 
     IERC20 public immutable underlying;
-    IERC20 public immutable targetToken;
+    IERC20 public immutable targetToken; // TODO: Remove, single pool for all pairs
     address public immutable x2swap;
     uint256 public totalDebt;
 
@@ -225,7 +225,7 @@ contract X2Pool is IERC4626 {
     }
 
     // Shares reflect pro-rata claim: shares / totalSupply == assets / totalAssets
-    function _convertToShares(uint256 assets, bool roundUp) internal view returns (uint256) {
+    function _convertToShares(uint256 assets, bool roundUp) internal view returns (uint256) { // TODO: Ask about roundUp potential attack!!! (yEarn case)
         uint256 supply = totalSupply;
         uint256 backing = totalAssets();
         if (supply == 0 || backing == 0) {
@@ -238,7 +238,7 @@ contract X2Pool is IERC4626 {
         return num / backing;
     }
 
-    function _convertToAssets(uint256 shares, bool roundUp) internal view returns (uint256) {
+    function _convertToAssets(uint256 shares, bool roundUp) internal view returns (uint256) { // TODO: Ask about roundUp potential attack!!! (yEarn case)
         uint256 supply = totalSupply;
         uint256 backing = totalAssets();
         if (supply == 0 || backing == 0) {

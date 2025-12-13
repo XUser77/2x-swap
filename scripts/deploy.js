@@ -25,8 +25,8 @@ async function main() {
   console.log(`Deploying with ${deployer.address}`);
   console.log(`Asset: ${asset}`);
 
-  const X2UniswapRouter = await hre.ethers.getContractFactory("X2UniswapRouter");
-  const x2uniswapRouter = await X2UniswapRouter.deploy(asset, targetToken, uniswapRouter);
+  const X2UniswapExchange = await hre.ethers.getContractFactory("X2UniswapExchange");
+  const x2uniswapRouter = await X2UniswapExchange.deploy(asset, targetToken, uniswapRouter);
 
   let oracleAddr = priceOracle;
   if (!oracleAddr) {
@@ -47,7 +47,7 @@ async function main() {
   await x2swap.waitForDeployment();
   const pool = await x2swap.pool();
 
-  console.log(`X2UniswapRouter deployed to: ${x2uniswapRouter.target}`);
+  console.log(`X2UniswapExchange deployed to: ${x2uniswapRouter.target}`);
   console.log(`X2Swap deployed to: ${x2swap.target}`);
   console.log(`X2Pool deployed to: ${pool}`);
 

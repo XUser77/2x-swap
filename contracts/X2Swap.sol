@@ -4,7 +4,7 @@ pragma solidity ^0.8.20;
 import {X2Pool} from "./X2Pool.sol";
 import {IERC20} from "./interfaces/IERC20.sol";
 import {Position} from "./structs/Position.sol";
-import {ISwapRouter} from "./interfaces/ISwapRouter.sol";
+import {IExchange} from "./interfaces/IExchange.sol";
 import {IPriceOracle} from "./interfaces/IPriceOracle.sol";
 
 /// @title X2Swap - factory wrapper that deploys an X2Pool
@@ -18,8 +18,9 @@ contract X2Swap {
     uint8 public immutable targetDecimals;
     IPriceOracle public immutable priceOracle;
     uint256 public immutable feeBps;
+
     uint256 public feesAccrued;
-    address[] public feeWithdrawers;
+    address[] public feeWithdrawers; // TODO: Governance contract (3 of 5)
     mapping(address => bool) public isFeeWithdrawer;
 
     uint256 public constant ORACLE_MAX_DEVIATION_BPS = 500; // 5%
@@ -28,12 +29,12 @@ contract X2Swap {
     mapping(uint256 => Position) public positions;
     mapping(address => uint256[]) public positionsOf;
 
-    ISwapRouter public swapRouter;
+    IExchange public swapRouter;
 
-    event OpenPosition(uint256 indexed id, address indexed sender, uint256 assetAmount, uint256 targetAmount, uint256 profitSharing);
-    event ClosePosition(uint256 indexed id, uint256 closeAssetAmount);
-    event FeeWithdrawerUpdated(address indexed account, bool allowed);
-    event FeesWithdrawn(address indexed caller, address indexed to, uint256 amount);
+    event OpenPosition(uint256 indexed id, address indexed sender, uint256 assetAmount, uint256 targetAmount, uint256 profitSharing); // TODO: add fee
+    event ClosePosition(uint256 indexed id, uint256 closeAssetAmount); // TODO: add fee
+    event FeeWithdrawerUpdated(address indexed account, bool allowed); // TODO: Remove
+    event FeesWithdrawn(address indexed caller, address indexed to, uint256 amount); // TODO: Remove
 
     constructor(
         address asset_,
@@ -53,7 +54,7 @@ contract X2Swap {
         assetDecimals = IERC20(asset_).decimals();
         targetToken = IERC20(targetToken_);
         targetDecimals = IERC20(targetToken_).decimals();
-        swapRouter = ISwapRouter(swapRouter_);
+        swapRouter = IExchange(swapRouter_);
         priceOracle = IPriceOracle(priceOracle_);
         feeBps = feeBps_;
         positionDuration = positionDuration_;
@@ -69,8 +70,8 @@ contract X2Swap {
         }
     }
 
-    function openPosition(uint256 assetAmount) external returns (uint256 id) {
-        require(assetAmount > 0, "Zero amount");
+    function openPosition(uint256 assetAmount) external returns (uint256 id) { // TODO: User max deviation
+        require(assetAmount > 0, "Zero amount"); // TODO: Another checks???
         // pull tokens from user, take opening fee
         require(asset.transferFrom(msg.sender, address(this), assetAmount), "Transfer failed");
         uint256 openFee = (assetAmount * feeBps) / 10_000;
@@ -113,9 +114,9 @@ contract X2Swap {
         emit OpenPosition(id, msg.sender, p.openAssetAmount, p.targetAmount, p.profitSharing);
     }
 
-    function closePosition(uint256 id) external {
+    function closePosition(uint256 id) external { // TODO: User deviation
         Position memory p = positions[id];
-        require(p.sender == msg.sender, "Not owner");
+        require(p.sender == msg.sender, "Not owner"); // TODO: Position is expired
 
         require(p.closeDate == 0, "Already closed");
 
@@ -147,12 +148,12 @@ contract X2Swap {
         pool.returnBorrow(poolAmount, poolPrincipal);
 
         if (borrowerNet > 0) {
-            require(asset.transfer(msg.sender, borrowerNet), "Borrower transfer failed");
+            require(asset.transfer(msg.sender, borrowerNet), "Borrower transfer failed"); // TODO: p.sender
         }
 
         positions[id].closeDate = block.timestamp;
-        positions[id].closeAssetAmount = borrowerNet;
-        emit ClosePosition(id, borrowerNet);
+        positions[id].closeAssetAmount = borrowerNet; // TODO: assetAmountOut
+        emit ClosePosition(id, borrowerNet); // TODO: assetAmountOut
     }
 
     /// @notice Returns pool profit share percentage based on pool utilization U = debt / (assets + debt).
@@ -217,7 +218,7 @@ contract X2Swap {
     function withdrawFees(address to, uint256 amount) external returns (uint256 withdrawn) {
         require(isFeeWithdrawer[msg.sender], "Not allowed");
         require(to != address(0), "Bad recipient");
-        withdrawn = amount == 0 ? feesAccrued : amount;
+        withdrawn = amount == 0 ? feesAccrued : amount; // TODO: Remove
         require(withdrawn <= feesAccrued, "Exceeds fees");
         feesAccrued -= withdrawn;
         require(asset.transfer(to, withdrawn), "Fee transfer failed");

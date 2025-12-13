@@ -58,8 +58,8 @@ describe("X2Pool/X2Swap flows", function () {
   it("deposit + redeem (gas output)", async function () {
     const [deployer, alice] = await hre.ethers.getSigners();
 
-    const X2UniswapRouter = await hre.ethers.getContractFactory("X2UniswapRouter", deployer);
-    const x2uniswap = await X2UniswapRouter.deploy(USDC, WETH, UNISWAP_V2_ROUTER);
+    const X2UniswapExchange = await hre.ethers.getContractFactory("X2UniswapExchange", deployer);
+    const x2uniswap = await X2UniswapExchange.deploy(USDC, WETH, UNISWAP_V2_ROUTER);
 
     const FakeOracle = await hre.ethers.getContractFactory("FakeOracle", deployer);
     const oracle = await FakeOracle.deploy(UNISWAP_V2_ROUTER, USDC, WETH);
@@ -92,8 +92,8 @@ describe("X2Pool/X2Swap flows", function () {
   it("openPosition + closePosition (no profit)", async function () {
     const [deployer, lender, trader] = await hre.ethers.getSigners();
 
-    const X2UniswapRouter = await hre.ethers.getContractFactory("X2UniswapRouter", deployer);
-    const x2uniswap = await X2UniswapRouter.deploy(USDC, WETH, UNISWAP_V2_ROUTER);
+    const X2UniswapExchange = await hre.ethers.getContractFactory("X2UniswapExchange", deployer);
+    const x2uniswap = await X2UniswapExchange.deploy(USDC, WETH, UNISWAP_V2_ROUTER);
 
     const FakeOracle = await hre.ethers.getContractFactory("FakeOracle", deployer);
     const oracle = await FakeOracle.deploy(UNISWAP_V2_ROUTER, USDC, WETH);
@@ -130,8 +130,8 @@ describe("X2Pool/X2Swap flows", function () {
   it("openPosition snapshots utilization-based profit sharing", async function () {
     const [deployer, lender, trader] = await hre.ethers.getSigners();
 
-    const X2UniswapRouter = await hre.ethers.getContractFactory("X2UniswapRouter", deployer);
-    const x2uniswap = await X2UniswapRouter.deploy(USDC, WETH, UNISWAP_V2_ROUTER);
+    const X2UniswapExchange = await hre.ethers.getContractFactory("X2UniswapExchange", deployer);
+    const x2uniswap = await X2UniswapExchange.deploy(USDC, WETH, UNISWAP_V2_ROUTER);
 
     const FakeOracle = await hre.ethers.getContractFactory("FakeOracle", deployer);
     const oracle = await FakeOracle.deploy(UNISWAP_V2_ROUTER, USDC, WETH);
