@@ -31,10 +31,9 @@ contract X2Swap {
 
     IExchange public swapRouter;
 
-    event OpenPosition(uint256 indexed id, address indexed sender, uint256 assetAmount, uint256 targetAmount, uint256 profitSharing); // TODO: add fee
-    event ClosePosition(uint256 indexed id, uint256 closeAssetAmount); // TODO: add fee
-    event FeeWithdrawerUpdated(address indexed account, bool allowed); // TODO: Remove
-    event FeesWithdrawn(address indexed caller, address indexed to, uint256 amount); // TODO: Remove
+    event OpenPosition(uint256 indexed id, address indexed sender, uint256 assetAmount, uint256 targetAmount, uint256 profitSharing, uint256 feeAmount);
+    event ClosePosition(uint256 indexed id, uint256 closeAssetAmount, uint256 feeAmount);
+    // fee withdraw events removed
 
     constructor(
         address asset_,
@@ -63,7 +62,6 @@ contract X2Swap {
             if (!isFeeWithdrawer[w]) {
                 isFeeWithdrawer[w] = true;
                 feeWithdrawers.push(w);
-                emit FeeWithdrawerUpdated(w, true);
             }
         }
     }
@@ -109,7 +107,7 @@ contract X2Swap {
         });
         positions[id] = p;
         positionsOf[msg.sender].push(id);
-        emit OpenPosition(id, msg.sender, p.openAssetAmount, p.targetAmount, p.profitSharing);
+        emit OpenPosition(id, msg.sender, p.openAssetAmount, p.targetAmount, p.profitSharing, openFee);
     }
 
     function closePosition(uint256 id) external { // TODO: User deviation
@@ -150,8 +148,8 @@ contract X2Swap {
         }
 
         positions[id].closeDate = block.timestamp;
-        positions[id].closeAssetAmount = borrowerNet; // TODO: assetAmountOut
-        emit ClosePosition(id, borrowerNet); // TODO: assetAmountOut
+        positions[id].closeAssetAmount = assetAmountOut;
+        emit ClosePosition(id, assetAmountOut, borrowerFee);
     }
 
     /// @notice Returns pool profit share percentage based on pool utilization U = debt / (assets + debt).
@@ -212,15 +210,15 @@ contract X2Swap {
 
     /// @notice Withdraw accrued fees (denominated in the asset token).
     /// @param to Recipient of the withdrawn fees.
-    /// @param amount Amount to withdraw; if 0, withdraws all accrued fees.
+    /// @param amount Amount to withdraw.
     function withdrawFees(address to, uint256 amount) external returns (uint256 withdrawn) {
         require(isFeeWithdrawer[msg.sender], "Not allowed");
         require(to != address(0), "Bad recipient");
-        withdrawn = amount == 0 ? feesAccrued : amount; // TODO: Remove
-        require(withdrawn <= feesAccrued, "Exceeds fees");
-        feesAccrued -= withdrawn;
-        require(asset.transfer(to, withdrawn), "Fee transfer failed");
-        emit FeesWithdrawn(msg.sender, to, withdrawn);
+        require(amount > 0, "Zero amount");
+        require(amount <= feesAccrued, "Exceeds fees");
+        feesAccrued -= amount;
+        require(asset.transfer(to, amount), "Fee transfer failed");
+        withdrawn = amount;
     }
 
     function _splitClose(uint256 openAssetAmount, uint256 assetAmountOut, uint256 profitSharing)

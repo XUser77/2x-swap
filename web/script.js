@@ -973,13 +973,12 @@ async function withdrawFees() {
 
   const amountVal = $("feesAmount")?.value?.trim();
   let amount = 0n;
-  if (amountVal) {
-    try {
-      amount = ethers.parseUnits(amountVal.toString(), state.assetDecimals);
-    } catch (e) {
-      console.error(e);
-      return setFeesStatus("Invalid amount");
-    }
+  if (!amountVal || Number(amountVal) <= 0) return setFeesStatus("Enter amount");
+  try {
+    amount = ethers.parseUnits(amountVal.toString(), state.assetDecimals);
+  } catch (e) {
+    console.error(e);
+    return setFeesStatus("Invalid amount");
   }
   try {
     setFeesStatus("Withdrawing...");
