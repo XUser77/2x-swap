@@ -64,9 +64,12 @@ describe("X2Pool/X2Swap flows", function () {
     const FakeOracle = await hre.ethers.getContractFactory("FakeOracle", deployer);
     const oracle = await FakeOracle.deploy(UNISWAP_V2_ROUTER, USDC, WETH);
 
-    const X2Swap = await hre.ethers.getContractFactory("X2Swap", deployer);
-    const swap = await X2Swap.deploy(USDC, WETH, x2uniswap.target, oracle.target, 0, [deployer.address], "2x LP USDC-ETH", "2xUSDCxETH", 30n * 24n * 60n * 60n);
-    const poolAddr = await swap.pool();
+    const X2Deployer = await hre.ethers.getContractFactory("X2Deployer", deployer);
+    const router = await X2Deployer.deploy(USDC, x2uniswap.target, oracle.target, 0, 30n * 24n * 60n * 60n, [deployer.address], [WETH]);
+    await router.waitForDeployment();
+    const swapAddr = await router.swaps(WETH);
+    const swap = await hre.ethers.getContractAt("X2Swap", swapAddr, deployer);
+    const poolAddr = await router.pool();
     const pool = await hre.ethers.getContractAt("X2Pool", poolAddr, deployer);
 
     const usdc = await hre.ethers.getContractAt(erc20Abi, USDC, deployer);
@@ -98,9 +101,12 @@ describe("X2Pool/X2Swap flows", function () {
     const FakeOracle = await hre.ethers.getContractFactory("FakeOracle", deployer);
     const oracle = await FakeOracle.deploy(UNISWAP_V2_ROUTER, USDC, WETH);
 
-    const X2Swap = await hre.ethers.getContractFactory("X2Swap", deployer);
-    const swap = await X2Swap.deploy(USDC, WETH, x2uniswap.target, oracle.target, 0, [deployer.address], "2x LP USDC-ETH", "2xUSDCxETH", 30n * 24n * 60n * 60n);
-    const poolAddr = await swap.pool();
+    const X2Deployer = await hre.ethers.getContractFactory("X2Deployer", deployer);
+    const router = await X2Deployer.deploy(USDC, x2uniswap.target, oracle.target, 0, 30n * 24n * 60n * 60n, [deployer.address], [WETH]);
+    await router.waitForDeployment();
+    const swapAddr = await router.swaps(WETH);
+    const swap = await hre.ethers.getContractAt("X2Swap", swapAddr, deployer);
+    const poolAddr = await router.pool();
     const pool = await hre.ethers.getContractAt("X2Pool", poolAddr, deployer);
 
     const usdc = await hre.ethers.getContractAt(erc20Abi, USDC, deployer);
@@ -118,10 +124,10 @@ describe("X2Pool/X2Swap flows", function () {
     await usdc.connect(trader).approve(swap.target, hre.ethers.MaxUint256);
 
     const traderStart = await usdc.balanceOf(trader.address);
-    await logTx("swap.openPosition", swap.connect(trader).openPosition(1_000n * 10n ** BigInt(usdcDecimals)));
+    await logTx("router.openPosition", router.connect(trader).openPosition(WETH, 1_000n * 10n ** BigInt(usdcDecimals)));
     expect(await pool.totalDebt()).to.equal(1_000n * 10n ** BigInt(usdcDecimals));
 
-    await logTx("swap.closePosition", swap.connect(trader).closePosition(0));
+    await logTx("router.closePosition", router.connect(trader).closePosition(WETH, 0));
     expect(await pool.totalDebt()).to.equal(0n);
     const traderEnd = await usdc.balanceOf(trader.address);
     expect(traderEnd).to.be.lte(traderStart); // round-trip on Uniswap typically loses to fees
@@ -136,9 +142,12 @@ describe("X2Pool/X2Swap flows", function () {
     const FakeOracle = await hre.ethers.getContractFactory("FakeOracle", deployer);
     const oracle = await FakeOracle.deploy(UNISWAP_V2_ROUTER, USDC, WETH);
 
-    const X2Swap = await hre.ethers.getContractFactory("X2Swap", deployer);
-    const swap = await X2Swap.deploy(USDC, WETH, x2uniswap.target, oracle.target, 0, [deployer.address], "2x LP USDC-ETH", "2xUSDCxETH", 30n * 24n * 60n * 60n);
-    const poolAddr = await swap.pool();
+    const X2Deployer = await hre.ethers.getContractFactory("X2Deployer", deployer);
+    const router = await X2Deployer.deploy(USDC, x2uniswap.target, oracle.target, 0, 30n * 24n * 60n * 60n, [deployer.address], [WETH]);
+    await router.waitForDeployment();
+    const swapAddr = await router.swaps(WETH);
+    const swap = await hre.ethers.getContractAt("X2Swap", swapAddr, deployer);
+    const poolAddr = await router.pool();
     const pool = await hre.ethers.getContractAt("X2Pool", poolAddr, deployer);
 
     const usdc = await hre.ethers.getContractAt(erc20Abi, USDC, deployer);
@@ -154,7 +163,7 @@ describe("X2Pool/X2Swap flows", function () {
 
     // trader borrows 910 => utilization 91% -> pool share 30%
     await usdc.connect(trader).approve(swap.target, hre.ethers.MaxUint256);
-    await logTx("swap.openPosition (high util)", swap.connect(trader).openPosition(910n * 10n ** BigInt(usdcDecimals)));
+    await logTx("router.openPosition (high util)", router.connect(trader).openPosition(WETH, 910n * 10n ** BigInt(usdcDecimals)));
     const pos = await swap.positions(0);
     expect(pos[6]).to.equal(30n);
   });

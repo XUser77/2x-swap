@@ -1,7 +1,7 @@
 /* Deployment script for X2Swap (deploys X2Pool internally)
  *
  * Usage (mainnet fork defaults):
- *   ASSET=0x... TOKEN_NAME="ETH-USDC X2 Pool" TOKEN_SYMBOL="2xETHxUSDC" POSITION_DURATION=2592000 npx hardhat run scripts/deploy.js --network <network>
+ *   ASSET=0x... POSITION_DURATION=2592000 npx hardhat run scripts/deploy.js --network <network>
  *
  * If ASSET is omitted, defaults to mainnet USDC for fork testing.
  */
@@ -15,8 +15,6 @@ async function main() {
   const uniswapRouter = process.env.ROUTER || "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"; // Uniswap V2
   const priceOracle = process.env.PRICE_ORACLE || ""; // optional override
   const feeBps = process.env.FEE_BPS ? BigInt(process.env.FEE_BPS) : 50n; // default 0.5%
-  const name = process.env.TOKEN_NAME || "ETH-USDC X2 Pool";
-  const symbol = process.env.TOKEN_SYMBOL || "2xETHxUSDC";
   const positionDuration = process.env.POSITION_DURATION
     ? BigInt(process.env.POSITION_DURATION)
     : 30n * 24n * 60n * 60n; // default 30 days in seconds
@@ -39,16 +37,28 @@ async function main() {
     console.log(`Using PRICE_ORACLE: ${oracleAddr}`);
   }
 
-  const X2Swap = await hre.ethers.getContractFactory("X2Swap");
   const feeWithdrawers = process.env.FEE_WITHDRAWERS
     ? process.env.FEE_WITHDRAWERS.split(",").map((s) => s.trim()).filter(Boolean)
     : [deployer.address];
-  const x2swap = await X2Swap.deploy(asset, targetToken, x2uniswapRouter.target, oracleAddr, feeBps, feeWithdrawers, name, symbol, positionDuration);
-  await x2swap.waitForDeployment();
-  const pool = await x2swap.pool();
+
+  const X2Deployer = await hre.ethers.getContractFactory("X2Deployer");
+  const x2deployer = await X2Deployer.deploy(
+    asset,
+    x2uniswapRouter.target,
+    oracleAddr,
+    feeBps,
+    positionDuration,
+    feeWithdrawers,
+    [targetToken]
+  );
+  await x2deployer.waitForDeployment();
+
+  const x2swap = await x2deployer.swaps(targetToken);
+  const pool = await x2deployer.pool();
 
   console.log(`X2UniswapExchange deployed to: ${x2uniswapRouter.target}`);
-  console.log(`X2Swap deployed to: ${x2swap.target}`);
+  console.log(`X2Deployer deployed to: ${x2deployer.target}`);
+  console.log(`X2Swap deployed to: ${x2swap}`);
   console.log(`X2Pool deployed to: ${pool}`);
 
   // Read asset from the deployed pool to persist source-of-truth
@@ -57,7 +67,8 @@ async function main() {
 
   const deployment = {
     network: hre.network.name,
-    x2swap: x2swap.target
+    x2deployer: x2deployer.target,
+    targetToken
   };
 
   const dataDir = path.join(__dirname, "..", "web", "data");

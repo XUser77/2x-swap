@@ -8,29 +8,24 @@ import {IERC4626} from "./interfaces/IERC4626.sol";
 /// @notice Shares represent a pro-rata claim on pool assets; conversions adjust with gains/losses.
 contract X2Pool is IERC4626 {
     // ERC20 share metadata
-    string public name;
-    string public symbol;
-    uint8 public immutable decimals;
+    string public constant name = "2x Swap Liquidity Provider Toket";
+    string public constant symbol = "2xLP";
+    uint8 public constant decimals = 6;
 
     IERC20 public immutable underlying;
-    IERC20 public immutable targetToken; // TODO: Remove, single pool for all pairs
-    address public immutable x2swap;
+    address public immutable x2deployer;
+    mapping(address => bool) public isSwap;
     uint256 public totalDebt;
 
     uint256 public totalSupply;
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
 
-    constructor(address asset_, address targetToken_, address x2swap_, string memory name_, string memory symbol_) {
+    constructor(address asset_, address x2deployer_) {
         require(asset_ != address(0), "Asset required");
-        require(targetToken_ != address(0), "Target token required");
-        require(x2swap_ != address(0), "Swap required");
+        require(x2deployer_ != address(0), "Deployer required");
         underlying = IERC20(asset_);
-        targetToken = IERC20(targetToken_);
-        x2swap = x2swap_;
-        decimals = underlying.decimals();
-        name = name_;
-        symbol = symbol_;
+        x2deployer = x2deployer_;
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -115,6 +110,7 @@ contract X2Pool is IERC4626 {
 
     function deposit(uint256 assets, address receiver) public override returns (uint256 shares) {
         require(assets > 0, "Zero assets");
+        require(receiver != address(0), "Bad receiver");
         shares = convertToShares(assets);
         require(underlying.transferFrom(msg.sender, address(this), assets), "Asset transfer failed");
         _mint(receiver, shares);
@@ -123,6 +119,7 @@ contract X2Pool is IERC4626 {
 
     function mint(uint256 shares, address receiver) external override returns (uint256 assets) {
         require(shares > 0, "Zero shares");
+        require(receiver != address(0), "Bad receiver");
         assets = convertToAssets(shares);
         require(underlying.transferFrom(msg.sender, address(this), assets), "Asset transfer failed");
         _mint(receiver, shares);
@@ -131,6 +128,8 @@ contract X2Pool is IERC4626 {
 
     function withdraw(uint256 assets, address receiver, address owner) public override returns (uint256 shares) {
         require(assets > 0, "Zero assets");
+        require(receiver != address(0), "Bad receiver");
+        require(owner != address(0), "Bad owner");
         shares = convertToShares(assets);
         if (msg.sender != owner) {
             uint256 currentAllowance = allowance[owner][msg.sender];
@@ -146,6 +145,8 @@ contract X2Pool is IERC4626 {
 
     function redeem(uint256 shares, address receiver, address owner) external override returns (uint256 assets) {
         require(shares > 0, "Zero shares");
+        require(receiver != address(0), "Bad receiver");
+        require(owner != address(0), "Bad owner");
         assets = convertToAssets(shares);
         if (msg.sender != owner) {
             uint256 currentAllowance = allowance[owner][msg.sender];
@@ -163,10 +164,16 @@ contract X2Pool is IERC4626 {
                             X2SWAP ACTIONS
     //////////////////////////////////////////////////////////////*/
 
+    function registerSwap(address swap) external {
+        require(msg.sender == x2deployer, "Not deployer");
+        require(swap != address(0), "Bad swap");
+        isSwap[swap] = true;
+    }
+
     /// @notice Borrow underlying to the linked X2Swap contract.
     /// @dev Only callable by the configured X2Swap.
     function borrow(uint256 amount) external {
-        require(msg.sender == x2swap, "Not swap");
+        require(isSwap[msg.sender], "Not swap");
         require(amount > 0, "Zero amount");
         totalDebt += amount;
         require(underlying.transfer(msg.sender, amount), "Transfer failed");
@@ -175,7 +182,7 @@ contract X2Pool is IERC4626 {
     /// @notice Repay borrowed underlying. Caller must transfer tokens and specify how much debt to clear.
     /// @dev Amount of tokens returned and amount of debt cleared can differ (e.g., accounting for losses).
     function returnBorrow(uint256 amount, uint256 debtRepaid) external {
-        require(msg.sender == x2swap, "Not swap");
+        require(isSwap[msg.sender], "Not swap");
         require(debtRepaid <= totalDebt, "Exceeds debt");
         if (amount > 0) {
             require(underlying.transferFrom(msg.sender, address(this), amount), "Transfer failed");

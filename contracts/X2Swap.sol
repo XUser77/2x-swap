@@ -42,14 +42,12 @@ contract X2Swap {
         address swapRouter_,
         address priceOracle_,
         uint256 feeBps_,
+        address pool_,
         address[] memory feeWithdrawers_,
-        string memory lpTokenName,
-        string memory lpTokenSymbol,
         uint256 positionDuration_
     ) {
-        require(priceOracle_ != address(0), "Oracle required");
-        require(feeBps_ <= 10_000, "Bad fee");
-        pool = new X2Pool(asset_, targetToken_, address(this), lpTokenName, lpTokenSymbol);
+        require(pool_ != address(0), "Pool required");
+        pool = X2Pool(pool_);
         asset = IERC20(asset_);
         assetDecimals = IERC20(asset_).decimals();
         targetToken = IERC20(targetToken_);

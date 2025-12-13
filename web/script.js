@@ -723,6 +723,13 @@ async function loadConfig() {
     const cfg = await res.json();
     if (cfg.x2swap) {
       state.swapAddress = cfg.x2swap;
+    } else if (cfg.x2deployer && cfg.targetToken) {
+      if (!window.ethereum) throw new Error("Metamask not detected");
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      const deployer = new ethers.Contract(cfg.x2deployer, ["function swaps(address) view returns (address)"], provider);
+      const swapAddr = await deployer.swaps(cfg.targetToken);
+      if (!swapAddr || swapAddr === ethers.ZeroAddress) throw new Error("x2swap missing");
+      state.swapAddress = swapAddr;
     } else {
       throw new Error("x2swap missing");
     }
