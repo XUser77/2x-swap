@@ -112,7 +112,9 @@ contract X2Swap {
 
     function closePosition(uint256 id) external { // TODO: User deviation
         Position memory p = positions[id];
-        require(p.sender == msg.sender, "Not owner"); // TODO: Position is expired
+        if (block.timestamp < p.expireDate) {
+            require(p.sender == msg.sender, "Not owner");
+        }
 
         require(p.closeDate == 0, "Already closed");
 
@@ -144,7 +146,7 @@ contract X2Swap {
         pool.returnBorrow(poolAmount, poolPrincipal);
 
         if (borrowerNet > 0) {
-            require(asset.transfer(msg.sender, borrowerNet), "Borrower transfer failed"); // TODO: p.sender
+            require(asset.transfer(p.sender, borrowerNet), "Borrower transfer failed");
         }
 
         positions[id].closeDate = block.timestamp;
