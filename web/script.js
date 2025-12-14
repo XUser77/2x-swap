@@ -19,13 +19,15 @@ const swapAbi = [
   "function feeBps() view returns (uint256)",
   "function feesAccrued() view returns (uint256)",
   "function withdrawFees(address to, uint256 amount) returns (uint256)",
-  "function openPosition(uint256 assetAmount) returns (uint256)",
-  "function closePosition(uint256 id)",
+  "function openPosition(uint256 assetAmount, uint256 maxDeviationBps) returns (uint256)",
+  "function closePosition(uint256 id, uint256 maxDeviationBps)",
   "function getPositionsOf(address) view returns (uint256[] memory)",
   "function positions(uint256) view returns (uint256,address,uint256,uint256,uint256,uint256,uint256,uint256,uint256)",
   "function checkPosition(uint256) view returns (int256 profit, uint256 borrowerAmount, uint256 poolAmount, uint256 feeAmount, uint256 assetAmountOut)",
   "function targetRate() view returns (uint256)"
 ];
+
+const DEFAULT_MAX_DEVIATION_BPS = 500n;
 
 const feeGovAbi = ["function isWithdrawer(address) view returns (bool)"];
 
@@ -938,7 +940,7 @@ async function openPosition() {
   if (!ok) return;
   try {
     setPositionStatus("Opening position...");
-    const tx = await state.swap.openPosition(amount, { gasLimit: 900000n });
+    const tx = await state.swap.openPosition(amount, DEFAULT_MAX_DEVIATION_BPS, { gasLimit: 900000n });
     setPositionStatus("Pending… " + tx.hash);
     await tx.wait();
     setPositionStatus("Position opened");
@@ -966,7 +968,7 @@ async function handleClosePosition(id) {
   }
   try {
     setPositionsStatus(`Closing #${id}...`);
-    const tx = await state.swap.closePosition(id, { gasLimit: 900000n });
+    const tx = await state.swap.closePosition(id, DEFAULT_MAX_DEVIATION_BPS, { gasLimit: 900000n });
     setPositionsStatus("Pending… " + tx.hash);
     await tx.wait();
     setPositionsStatus("Closed");

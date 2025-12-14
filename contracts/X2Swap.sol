@@ -59,8 +59,9 @@ contract X2Swap {
         positionDuration = positionDuration_;
     }
 
-    function openPosition(uint256 assetAmount) external returns (uint256 id) { // TODO: User max deviation
+    function openPosition(uint256 assetAmount, uint256 maxDeviationBps) external returns (uint256 id) {
         require(assetAmount > 0, "Zero amount"); // TODO: Another checks???
+        require(maxDeviationBps <= ORACLE_MAX_DEVIATION_BPS, "Max deviation too high");
         // pull tokens from user, take opening fee
         require(asset.transferFrom(msg.sender, address(this), assetAmount), "Transfer failed");
         uint256 openFee = (assetAmount * feeBps) / 10_000;
@@ -75,7 +76,7 @@ contract X2Swap {
         // Swap combined amount to target token (assumes allowance to router via pool -> swap)
         uint256 expectedOut = swapRouter.getAmountOut(address(asset), totalAmount);
         require(expectedOut > 0, "No output");
-        uint256 oracleMinTargetOut = _oracleMinTargetOut(totalAmount);
+        uint256 oracleMinTargetOut = _oracleMinTargetOut(totalAmount, maxDeviationBps);
         require(expectedOut >= oracleMinTargetOut, "Oracle deviation");
 
         uint256 currentAllowance = asset.allowance(address(this), address(swapRouter));
@@ -103,7 +104,8 @@ contract X2Swap {
         emit OpenPosition(id, msg.sender, p.openAssetAmount, p.targetAmount, p.profitSharing, openFee);
     }
 
-    function closePosition(uint256 id) external { // TODO: User deviation
+    function closePosition(uint256 id, uint256 maxDeviationBps) external {
+        require(maxDeviationBps <= ORACLE_MAX_DEVIATION_BPS, "Max deviation too high");
         Position memory p = positions[id];
         if (block.timestamp < p.expireDate) {
             require(p.sender == msg.sender, "Not owner");
@@ -115,7 +117,7 @@ contract X2Swap {
         uint256 amountIn = p.targetAmount;
         uint256 minOut = swapRouter.getAmountOut(address(targetToken), amountIn);
         require(minOut > 0, "No output");
-        uint256 oracleMinAssetOut = _oracleMinAssetOut(amountIn);
+        uint256 oracleMinAssetOut = _oracleMinAssetOut(amountIn, maxDeviationBps);
         require(minOut >= oracleMinAssetOut, "Oracle deviation");
 
         uint256 currentAllowance = targetToken.allowance(address(this), address(swapRouter));
@@ -185,18 +187,18 @@ contract X2Swap {
         return price;
     }
 
-    function _oracleMinTargetOut(uint256 assetAmountIn) internal view returns (uint256) {
+    function _oracleMinTargetOut(uint256 assetAmountIn, uint256 maxDeviationBps) internal view returns (uint256) {
         uint256 priceAssetPerTarget = _oraclePriceAssetPerTarget(); // asset units per 1 target token
         require(priceAssetPerTarget > 0, "Oracle price 0");
         uint256 targetOut = (assetAmountIn * (10 ** uint256(targetDecimals))) / priceAssetPerTarget;
-        return (targetOut * (10_000 - ORACLE_MAX_DEVIATION_BPS)) / 10_000;
+        return (targetOut * (10_000 - maxDeviationBps)) / 10_000;
     }
 
-    function _oracleMinAssetOut(uint256 targetAmountIn) internal view returns (uint256) {
+    function _oracleMinAssetOut(uint256 targetAmountIn, uint256 maxDeviationBps) internal view returns (uint256) {
         uint256 priceAssetPerTarget = _oraclePriceAssetPerTarget(); // asset units per 1 target token
         require(priceAssetPerTarget > 0, "Oracle price 0");
         uint256 assetOut = (targetAmountIn * priceAssetPerTarget) / (10 ** uint256(targetDecimals));
-        return (assetOut * (10_000 - ORACLE_MAX_DEVIATION_BPS)) / 10_000;
+        return (assetOut * (10_000 - maxDeviationBps)) / 10_000;
     }
 
     /// @notice Withdraw accrued fees (denominated in the asset token).

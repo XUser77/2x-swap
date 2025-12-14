@@ -137,12 +137,15 @@ describe("X2Pool/X2Swap flows", function () {
     await usdc.connect(trader).approve(swap.target, hre.ethers.MaxUint256);
 
     const traderStart = await usdc.balanceOf(trader.address);
-    const openReceipt = await logTx("swap.openPosition", swap.connect(trader).openPosition(1_000n * 10n ** BigInt(usdcDecimals)));
+    const openReceipt = await logTx(
+      "swap.openPosition",
+      swap.connect(trader).openPosition(1_000n * 10n ** BigInt(usdcDecimals), 500)
+    );
     const openEvent = openReceipt.logs.find((l) => l.fragment && l.fragment.name === "OpenPosition");
     const posId = openEvent.args.id;
     expect(await pool.totalDebt()).to.equal(1_000n * 10n ** BigInt(usdcDecimals));
 
-    await logTx("swap.closePosition", swap.connect(trader).closePosition(posId));
+    await logTx("swap.closePosition", swap.connect(trader).closePosition(posId, 500));
     expect(await pool.totalDebt()).to.equal(0n);
     const traderEnd = await usdc.balanceOf(trader.address);
     expect(traderEnd).to.be.lte(traderStart); // round-trip on Uniswap typically loses to fees
@@ -187,7 +190,7 @@ describe("X2Pool/X2Swap flows", function () {
 
     // trader borrows 910 => utilization 91% -> pool share 30%
     await usdc.connect(trader).approve(swap.target, hre.ethers.MaxUint256);
-    await logTx("swap.openPosition (high util)", swap.connect(trader).openPosition(910n * 10n ** BigInt(usdcDecimals)));
+    await logTx("swap.openPosition (high util)", swap.connect(trader).openPosition(910n * 10n ** BigInt(usdcDecimals), 500));
     const pos = await swap.positions(0);
     expect(pos[6]).to.equal(30n);
   });
