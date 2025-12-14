@@ -19,7 +19,7 @@ async function main() {
     ? BigInt(process.env.POSITION_DURATION)
     : 30n * 24n * 60n * 60n; // default 30 days in seconds
 
-  const [deployer] = await hre.ethers.getSigners();
+  const [deployer, g2, g3] = await hre.ethers.getSigners();
   console.log(`Deploying with ${deployer.address}`);
   console.log(`Asset: ${asset}`);
 
@@ -40,6 +40,9 @@ async function main() {
   const feeWithdrawers = process.env.FEE_WITHDRAWERS
     ? process.env.FEE_WITHDRAWERS.split(",").map((s) => s.trim()).filter(Boolean)
     : [deployer.address];
+  const governors = process.env.GOVERNORS
+    ? process.env.GOVERNORS.split(",").map((s) => s.trim()).filter(Boolean)
+    : [deployer.address, g2.address, g3.address];
 
   const X2Deployer = await hre.ethers.getContractFactory("X2Deployer");
   const x2deployer = await X2Deployer.deploy(
@@ -48,6 +51,7 @@ async function main() {
     oracleAddr,
     feeBps,
     positionDuration,
+    governors,
     feeWithdrawers,
     [targetToken]
   );

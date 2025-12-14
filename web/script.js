@@ -12,14 +12,12 @@ const routerAbi = [
 
 const swapAbi = [
   "function pool() view returns (address)",
+  "function feeGovernance() view returns (address)",
   "function asset() view returns (address)",
   "function targetToken() view returns (address)",
   "function positionDuration() view returns (uint256)",
   "function feeBps() view returns (uint256)",
   "function feesAccrued() view returns (uint256)",
-  "function feeWithdrawers(uint256) view returns (address)",
-  "function feeWithdrawersCount() view returns (uint256)",
-  "function isFeeWithdrawer(address) view returns (bool)",
   "function withdrawFees(address to, uint256 amount) returns (uint256)",
   "function openPosition(uint256 assetAmount) returns (uint256)",
   "function closePosition(uint256 id)",
@@ -28,6 +26,8 @@ const swapAbi = [
   "function checkPosition(uint256) view returns (int256 profit, uint256 borrowerAmount, uint256 poolAmount, uint256 feeAmount, uint256 assetAmountOut)",
   "function targetRate() view returns (uint256)"
 ];
+
+const feeGovAbi = ["function isWithdrawer(address) view returns (bool)"];
 
 const erc20Abi = [
   "function name() view returns (string)",
@@ -84,7 +84,9 @@ const state = {
   positions: [],
   feeBps: 0n,
   feesAccrued: 0n,
-  canWithdrawFees: false
+  canWithdrawFees: false,
+  feeGovernanceAddress: null,
+  feeGovernance: null
 };
 
 const $ = (id) => document.getElementById(id);
@@ -288,10 +290,13 @@ async function connect() {
     state.swap = new ethers.Contract(state.swapAddress, swapAbi, state.signer);
     try {
       const poolAddr = await state.swap.pool();
+      const feeGovAddr = await state.swap.feeGovernance();
       const assetAddr = await state.swap.asset();
       const targetAddr = await state.swap.targetToken();
       const duration = await state.swap.positionDuration();
       const feeBps = await state.swap.feeBps();
+      state.feeGovernanceAddress = feeGovAddr;
+      state.feeGovernance = feeGovAddr && feeGovAddr !== ethers.ZeroAddress ? new ethers.Contract(feeGovAddr, feeGovAbi, state.provider) : null;
       state.vaultAddress = poolAddr;
       state.assetAddress = assetAddr;
       state.targetTokenAddress = targetAddr;
@@ -407,7 +412,21 @@ async function refreshPoolInfo() {
       setFeesAccrued(ethers.formatUnits(feesAccrued, state.assetDecimals));
 
       if (state.addr) {
-        const canWithdraw = await state.swap.isFeeWithdrawer(state.addr);
+        let canWithdraw = false;
+        if (state.feeGovernance) {
+          canWithdraw = await state.feeGovernance.isWithdrawer(state.addr);
+        } else {
+          try {
+            const feeGovAddr = await state.swap.feeGovernance();
+            if (feeGovAddr && feeGovAddr !== ethers.ZeroAddress) {
+              state.feeGovernanceAddress = feeGovAddr;
+              state.feeGovernance = new ethers.Contract(feeGovAddr, feeGovAbi, state.provider);
+              canWithdraw = await state.feeGovernance.isWithdrawer(state.addr);
+            }
+          } catch (e) {
+            console.error("feeGovernance fetch failed", e);
+          }
+        }
         state.canWithdrawFees = canWithdraw;
         setFeesAuth(canWithdraw ? "You can withdraw fees." : "You are not authorized to withdraw fees.");
         const feesTo = $("feesTo");
