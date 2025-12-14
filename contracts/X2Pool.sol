@@ -8,7 +8,7 @@ import {IERC4626} from "./interfaces/IERC4626.sol";
 /// @notice Shares represent a pro-rata claim on pool assets; conversions adjust with gains/losses.
 contract X2Pool is IERC4626 {
     // ERC20 share metadata
-    string public constant name = "2x Swap Liquidity Provider Toket";
+    string public constant name = "2x Swap Liquidity Provider Token";
     string public constant symbol = "2xLP";
     uint8 public constant decimals = 6;
 

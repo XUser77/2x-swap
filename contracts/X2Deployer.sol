@@ -27,7 +27,6 @@ contract X2Deployer {
         uint256 feeBps_,
         uint256 positionDuration_,
         address[] memory governors_,
-        address[] memory,
         address[] memory targetTokens_
     ) {
         require(asset_ != address(0), "Bad asset");
