@@ -9,6 +9,18 @@ const fs = require("fs");
 const path = require("path");
 const hre = require("hardhat");
 
+async function assertHasCode(provider, address, label) {
+  if (!address) throw new Error(`${label} is empty`);
+  const code = await provider.getCode(address);
+  if (!code || code === "0x") {
+    throw new Error(
+      `${label} has no contract code at ${address}. ` +
+        `You are likely deploying to a non-forked chain. ` +
+        `Set MAINNET_RPC/FORK_URL for forking, or deploy/provide ${label} for your custom testnet.`
+    );
+  }
+}
+
 async function main() {
   const asset = process.env.ASSET || "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"; // USDC mainnet
   const targetToken = process.env.TARGET_TOKEN || "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"; // WETH mainnet
@@ -25,6 +37,7 @@ async function main() {
 
   const X2UniswapExchange = await hre.ethers.getContractFactory("X2UniswapExchange");
   const x2uniswapRouter = await X2UniswapExchange.deploy(asset, targetToken, uniswapRouter);
+  await x2uniswapRouter.waitForDeployment();
 
   let oracleAddr = priceOracle;
   if (!oracleAddr) {
@@ -52,7 +65,6 @@ async function main() {
     feeBps,
     positionDuration,
     governors,
-    feeWithdrawers,
     [targetToken]
   );
   await x2deployer.waitForDeployment();
