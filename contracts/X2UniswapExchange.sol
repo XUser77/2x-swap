@@ -18,14 +18,23 @@ contract X2UniswapExchange is IExchange {
         uniV2Router = uniV2Router_;
     }
 
-    function getAmountOut(address tokenIn, uint256 amountIn) external view override returns (uint256) {
-        address[] memory path = _buildPath(tokenIn);
+    function getAmountOut(
+        address tokenIn,
+        uint256 amountIn,
+        address[] calldata path
+    ) external view override returns (uint256) {
+        _validatePath(tokenIn, path);
         uint256[] memory amounts = IUniV2Router(uniV2Router).getAmountsOut(amountIn, path);
         return amounts[amounts.length - 1];
     }
 
-    function swap(address tokenIn, uint256 amountIn, uint256 minAmountOut) external override returns (uint256 amountOut) {
-        address[] memory path = _buildPath(tokenIn);
+    function swap(
+        address tokenIn,
+        uint256 amountIn,
+        uint256 minAmountOut,
+        address[] calldata path
+    ) external override returns (uint256 amountOut) {
+        _validatePath(tokenIn, path);
 
         // pull tokens in
         require(IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn), "Pull failed");
@@ -42,16 +51,15 @@ contract X2UniswapExchange is IExchange {
         return amounts[amounts.length - 1];
     }
 
-    function _buildPath(address tokenIn) internal view returns (address[] memory path) {
+    function _validatePath(address tokenIn, address[] calldata path) internal view {
+        require(path.length >= 2, "Bad path");
+        require(path[0] == tokenIn, "Bad tokenIn");
+        address last = path[path.length - 1];
         if (tokenIn == token0) {
-            path = new address[](2);
-            path[0] = token0;
-            path[1] = token1;
+            require(last == token1, "Bad tokenOut");
         } else {
             require(tokenIn == token1, "Invalid tokenIn");
-            path = new address[](2);
-            path[0] = token1;
-            path[1] = token0;
+            require(last == token0, "Bad tokenOut");
         }
     }
 

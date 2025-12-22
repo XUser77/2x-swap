@@ -61,11 +61,10 @@ async function main() {
   const x2deployer = await X2Deployer.deploy(
     asset,
     x2uniswapRouter.target,
-    oracleAddr,
     feeBps,
     positionDuration,
     governors,
-    [targetToken]
+    [[targetToken, oracleAddr]]
   );
   await x2deployer.waitForDeployment();
 
@@ -81,8 +80,13 @@ async function main() {
   const assetAddr = await (await hre.ethers.getContractAt("X2Pool", pool)).asset();
   console.log(`Underlying asset: ${assetAddr}`);
 
+  const networkConfig = hre.network.config || {};
+  const rpcUrl = typeof networkConfig.url === "string" ? networkConfig.url : null;
+  const chainId = networkConfig.chainId != null ? Number(networkConfig.chainId) : null;
+
   const deployment = {
-    network: hre.network.name,
+    rpcUrl,
+    chainId,
     x2deployer: x2deployer.target,
     targetToken
   };

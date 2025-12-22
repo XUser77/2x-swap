@@ -19,11 +19,11 @@ const swapAbi = [
   "function feeBps() view returns (uint256)",
   "function feesAccrued() view returns (uint256)",
   "function withdrawFees(address to, uint256 amount) returns (uint256)",
-  "function openPosition(uint256 assetAmount, uint256 maxDeviationBps) returns (uint256)",
-  "function closePosition(uint256 id, uint256 maxDeviationBps)",
+  "function openPosition(uint256 assetAmount, uint256 maxDeviationBps, address[] path) returns (uint256)",
+  "function closePosition(uint256 id, uint256 maxDeviationBps, address[] path)",
   "function getPositionsOf(address) view returns (uint256[] memory)",
   "function positions(uint256) view returns (uint256,address,uint256,uint256,uint256,uint256,uint256,uint256,uint256)",
-  "function checkPosition(uint256) view returns (int256 profit, uint256 borrowerAmount, uint256 poolAmount, uint256 feeAmount, uint256 assetAmountOut)",
+  "function checkPosition(uint256, address[] path) view returns (int256 profit, uint256 borrowerAmount, uint256 poolAmount, uint256 feeAmount, uint256 assetAmountOut)",
   "function targetRate() view returns (uint256)"
 ];
 
@@ -89,6 +89,20 @@ const state = {
   canWithdrawFees: false,
   feeGovernanceAddress: null,
   feeGovernance: null
+};
+
+const getOpenPath = () => {
+  if (!state.assetAddress || !state.targetTokenAddress) {
+    throw new Error("Swap path not configured");
+  }
+  return [state.assetAddress, state.targetTokenAddress];
+};
+
+const getClosePath = () => {
+  if (!state.assetAddress || !state.targetTokenAddress) {
+    throw new Error("Swap path not configured");
+  }
+  return [state.targetTokenAddress, state.assetAddress];
 };
 
 const $ = (id) => document.getElementById(id);
@@ -472,7 +486,10 @@ async function refreshPositions() {
         };
         if (position.closeDate === 0n) {
           try {
-            const [profit, borrowerAmount, poolAmount, feeAmount, assetAmountOut] = await state.swap.checkPosition(id);
+            const [profit, borrowerAmount, poolAmount, feeAmount, assetAmountOut] = await state.swap.checkPosition(
+              id,
+              getClosePath()
+            );
             position.profit = profit;
             position.borrowerAmount = borrowerAmount;
             position.poolAmount = poolAmount;
@@ -745,8 +762,12 @@ async function loadConfig() {
     if (cfg.x2swap) {
       state.swapAddress = cfg.x2swap;
     } else if (cfg.x2deployer && cfg.targetToken) {
-      if (!window.ethereum) throw new Error("Metamask not detected");
-      const provider = new ethers.BrowserProvider(window.ethereum);
+      const provider = cfg.rpcUrl
+        ? new ethers.JsonRpcProvider(cfg.rpcUrl, cfg.chainId ?? undefined)
+        : window.ethereum
+          ? new ethers.BrowserProvider(window.ethereum)
+          : null;
+      if (!provider) throw new Error("No provider: set rpcUrl in deployment.json or install MetaMask");
       const deployer = new ethers.Contract(cfg.x2deployer, ["function swaps(address) view returns (address)"], provider);
       const swapAddr = await deployer.swaps(cfg.targetToken);
       if (!swapAddr || swapAddr === ethers.ZeroAddress) throw new Error("x2swap missing");
@@ -757,7 +778,11 @@ async function loadConfig() {
     showApp();
   } catch (err) {
     console.warn("Config load failed:", err.message);
-    setLoading("Config not found. Ensure /data/deployment.json exists.");
+    if (err && err.message === "config not found") {
+      setLoading("Config not found. Ensure /data/deployment.json exists.");
+    } else {
+      setLoading(err && err.message ? `Config error: ${err.message}` : "Config load failed.");
+    }
   }
 }
 
@@ -940,7 +965,7 @@ async function openPosition() {
   if (!ok) return;
   try {
     setPositionStatus("Opening position...");
-    const tx = await state.swap.openPosition(amount, DEFAULT_MAX_DEVIATION_BPS, { gasLimit: 900000n });
+    const tx = await state.swap.openPosition(amount, DEFAULT_MAX_DEVIATION_BPS, getOpenPath(), { gasLimit: 900000n });
     setPositionStatus("Pending… " + tx.hash);
     await tx.wait();
     setPositionStatus("Position opened");
@@ -968,7 +993,7 @@ async function handleClosePosition(id) {
   }
   try {
     setPositionsStatus(`Closing #${id}...`);
-    const tx = await state.swap.closePosition(id, DEFAULT_MAX_DEVIATION_BPS, { gasLimit: 900000n });
+    const tx = await state.swap.closePosition(id, DEFAULT_MAX_DEVIATION_BPS, getClosePath(), { gasLimit: 900000n });
     setPositionsStatus("Pending… " + tx.hash);
     await tx.wait();
     setPositionsStatus("Closed");

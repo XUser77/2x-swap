@@ -65,12 +65,10 @@ describe("X2Pool/X2Swap flows", function () {
     const router = await X2Deployer.deploy(
       USDC,
       x2uniswap.target,
-      oracle.target,
       0,
       30n * 24n * 60n * 60n,
       [deployer.address, g2.address, g3.address],
-      [deployer.address],
-      [WETH]
+      [[WETH, oracle.target]]
     );
     await router.waitForDeployment();
     const poolAddr = await router.pool();
@@ -109,12 +107,10 @@ describe("X2Pool/X2Swap flows", function () {
     const router = await X2Deployer.deploy(
       USDC,
       x2uniswap.target,
-      oracle.target,
       0,
       30n * 24n * 60n * 60n,
       [deployer.address, lender.address, trader.address],
-      [deployer.address],
-      [WETH]
+      [[WETH, oracle.target]]
     );
     await router.waitForDeployment();
     const swapAddr = await router.swaps(WETH);
@@ -139,13 +135,13 @@ describe("X2Pool/X2Swap flows", function () {
     const traderStart = await usdc.balanceOf(trader.address);
     const openReceipt = await logTx(
       "swap.openPosition",
-      swap.connect(trader).openPosition(1_000n * 10n ** BigInt(usdcDecimals), 500)
+      swap.connect(trader).openPosition(1_000n * 10n ** BigInt(usdcDecimals), 500, [USDC, WETH])
     );
     const openEvent = openReceipt.logs.find((l) => l.fragment && l.fragment.name === "OpenPosition");
     const posId = openEvent.args.id;
     expect(await pool.totalDebt()).to.equal(1_000n * 10n ** BigInt(usdcDecimals));
 
-    await logTx("swap.closePosition", swap.connect(trader).closePosition(posId, 500));
+    await logTx("swap.closePosition", swap.connect(trader).closePosition(posId, 500, [WETH, USDC]));
     expect(await pool.totalDebt()).to.equal(0n);
     const traderEnd = await usdc.balanceOf(trader.address);
     expect(traderEnd).to.be.lte(traderStart); // round-trip on Uniswap typically loses to fees
@@ -164,12 +160,10 @@ describe("X2Pool/X2Swap flows", function () {
     const router = await X2Deployer.deploy(
       USDC,
       x2uniswap.target,
-      oracle.target,
       0,
       30n * 24n * 60n * 60n,
       [deployer.address, lender.address, trader.address],
-      [deployer.address],
-      [WETH]
+      [[WETH, oracle.target]]
     );
     await router.waitForDeployment();
     const swapAddr = await router.swaps(WETH);
@@ -190,7 +184,10 @@ describe("X2Pool/X2Swap flows", function () {
 
     // trader borrows 910 => utilization 91% -> pool share 30%
     await usdc.connect(trader).approve(swap.target, hre.ethers.MaxUint256);
-    await logTx("swap.openPosition (high util)", swap.connect(trader).openPosition(910n * 10n ** BigInt(usdcDecimals), 500));
+    await logTx(
+      "swap.openPosition (high util)",
+      swap.connect(trader).openPosition(910n * 10n ** BigInt(usdcDecimals), 500, [USDC, WETH])
+    );
     const pos = await swap.positions(0);
     expect(pos[6]).to.equal(30n);
   });

@@ -59,7 +59,11 @@ contract X2Swap {
         positionDuration = positionDuration_;
     }
 
-    function openPosition(uint256 assetAmount, uint256 maxDeviationBps) external returns (uint256 id) {
+    function openPosition(
+        uint256 assetAmount,
+        uint256 maxDeviationBps,
+        address[] calldata path
+    ) external returns (uint256 id) {
         require(assetAmount > 0, "Zero amount"); // TODO: Another checks???
         require(maxDeviationBps <= ORACLE_MAX_DEVIATION_BPS, "Max deviation too high");
         // pull tokens from user, take opening fee
@@ -74,7 +78,7 @@ contract X2Swap {
         uint256 totalAmount = netUserAmount * 2;
 
         // Swap combined amount to target token (assumes allowance to router via pool -> swap)
-        uint256 expectedOut = swapRouter.getAmountOut(address(asset), totalAmount);
+        uint256 expectedOut = swapRouter.getAmountOut(address(asset), totalAmount, path);
         require(expectedOut > 0, "No output");
         uint256 oracleMinTargetOut = _oracleMinTargetOut(totalAmount, maxDeviationBps);
         require(expectedOut >= oracleMinTargetOut, "Oracle deviation");
@@ -83,7 +87,7 @@ contract X2Swap {
         if (currentAllowance < totalAmount) {
             asset.approve(address(swapRouter), type(uint256).max);
         }
-        uint256 amountOut = swapRouter.swap(address(asset), totalAmount, expectedOut);
+        uint256 amountOut = swapRouter.swap(address(asset), totalAmount, expectedOut, path);
         require(amountOut >= expectedOut, "Swap slippage");
 
         uint256 profitSharing = currentProfitSharing();
@@ -104,7 +108,11 @@ contract X2Swap {
         emit OpenPosition(id, msg.sender, p.openAssetAmount, p.targetAmount, p.profitSharing, openFee);
     }
 
-    function closePosition(uint256 id, uint256 maxDeviationBps) external {
+    function closePosition(
+        uint256 id,
+        uint256 maxDeviationBps,
+        address[] calldata path
+    ) external {
         require(maxDeviationBps <= ORACLE_MAX_DEVIATION_BPS, "Max deviation too high");
         Position memory p = positions[id];
         if (block.timestamp < p.expireDate) {
@@ -115,7 +123,7 @@ contract X2Swap {
 
         // Swap target back to asset
         uint256 amountIn = p.targetAmount;
-        uint256 minOut = swapRouter.getAmountOut(address(targetToken), amountIn);
+        uint256 minOut = swapRouter.getAmountOut(address(targetToken), amountIn, path);
         require(minOut > 0, "No output");
         uint256 oracleMinAssetOut = _oracleMinAssetOut(amountIn, maxDeviationBps);
         require(minOut >= oracleMinAssetOut, "Oracle deviation");
@@ -124,7 +132,7 @@ contract X2Swap {
         if (currentAllowance < amountIn) {
             targetToken.approve(address(swapRouter), type(uint256).max);
         }
-        uint256 assetAmountOut = swapRouter.swap(address(targetToken), amountIn, minOut);
+        uint256 assetAmountOut = swapRouter.swap(address(targetToken), amountIn, minOut, path);
         (uint256 poolAmount, uint256 borrowerGross) = _splitClose(p.openAssetAmount, assetAmountOut, p.profitSharing);
         uint256 poolPrincipal = p.openAssetAmount / 2;
 
@@ -243,14 +251,14 @@ contract X2Swap {
     /// @return poolAmount amount the pool would receive
     /// @return feeAmount fee charged from borrower side
     /// @return assetAmountOut estimated amount after swapping target back to asset (before borrower fee)
-    function checkPosition(uint256 id)
+    function checkPosition(uint256 id, address[] calldata path)
         external
         view
         returns (int256 profit, uint256 borrowerAmount, uint256 poolAmount, uint256 feeAmount, uint256 assetAmountOut)
     {
         Position memory p = positions[id];
         require(p.openDate != 0, "Position not found");
-        assetAmountOut = swapRouter.getAmountOut(address(targetToken), p.targetAmount);
+        assetAmountOut = swapRouter.getAmountOut(address(targetToken), p.targetAmount, path);
 
         profit = int256(assetAmountOut) - int256(p.openAssetAmount);
         uint256 borrowerGross;

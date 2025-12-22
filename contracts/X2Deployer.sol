@@ -8,9 +8,13 @@ import {FeeGovernance} from "./FeeGovernance.sol";
 /// @title X2Deployer
 /// @notice Deploys a shared X2Pool and multiple X2Swap instances keyed by targetToken.
 contract X2Deployer {
+    struct TargetConfig {
+        address targetToken;
+        address priceOracle;
+    }
+
     address public immutable asset;
     address public immutable exchange;
-    address public immutable priceOracle;
     uint256 public immutable feeBps;
     uint256 public immutable positionDuration;
     X2Pool public immutable pool;
@@ -18,33 +22,32 @@ contract X2Deployer {
     mapping(address => address) public swaps; // targetToken => X2Swap
     address[] public allSwaps;
 
-    event SwapCreated(address indexed targetToken, address indexed x2swap);
+    event SwapCreated(address indexed targetToken, address indexed x2swap, address indexed priceOracle);
 
     constructor(
         address asset_,
         address exchange_,
-        address priceOracle_,
         uint256 feeBps_,
         uint256 positionDuration_,
         address[] memory governors_,
-        address[] memory targetTokens_
+        TargetConfig[] memory targets_
     ) {
         require(asset_ != address(0), "Bad asset");
         require(exchange_ != address(0), "Bad exchange");
-        require(priceOracle_ != address(0), "Bad oracle");
         require(feeBps_ <= 10_000, "Bad fee");
         asset = asset_;
         exchange = exchange_;
-        priceOracle = priceOracle_;
         feeBps = feeBps_;
         positionDuration = positionDuration_;
 
         pool = new X2Pool(asset_, address(this));
         feeGovernance = new FeeGovernance(governors_);
 
-        for (uint256 i = 0; i < targetTokens_.length; i++) {
-            address targetToken = targetTokens_[i];
+        for (uint256 i = 0; i < targets_.length; i++) {
+            address targetToken = targets_[i].targetToken;
+            address priceOracle = targets_[i].priceOracle;
             require(targetToken != address(0), "Bad target");
+            require(priceOracle != address(0), "Bad oracle");
             require(swaps[targetToken] == address(0), "Exists");
 
             X2Swap swap = new X2Swap(
@@ -62,7 +65,7 @@ contract X2Deployer {
             swaps[targetToken] = x2swap;
             allSwaps.push(x2swap);
             pool.registerSwap(x2swap);
-            emit SwapCreated(targetToken, x2swap);
+            emit SwapCreated(targetToken, x2swap, priceOracle);
         }
     }
 
