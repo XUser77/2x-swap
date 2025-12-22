@@ -5,7 +5,7 @@ import {IExchange} from "./interfaces/IExchange.sol";
 import {IERC20} from "./interfaces/IERC20.sol";
 
 /// @notice Minimal Uniswap V2 router adapter implementing IExchange for a fixed token0/token1 pair.
-contract X2UniswapExchange is IExchange {
+contract X2UniswapV2Exchange is IExchange {
     address public immutable token0;
     address public immutable token1;
     address public immutable uniV2Router;
@@ -18,13 +18,17 @@ contract X2UniswapExchange is IExchange {
         uniV2Router = uniV2Router_;
     }
 
+    function provider() external pure override returns (string memory) {
+        return "UniswapV2";
+    }
+
     function getAmountOut(
         address tokenIn,
         uint256 amountIn,
-        address[] calldata path
+        bytes calldata path
     ) external view override returns (uint256) {
-        _validatePath(tokenIn, path);
-        uint256[] memory amounts = IUniV2Router(uniV2Router).getAmountsOut(amountIn, path);
+        address[] memory decodedPath = _decodePath(tokenIn, path);
+        uint256[] memory amounts = IUniV2Router(uniV2Router).getAmountsOut(amountIn, decodedPath);
         return amounts[amounts.length - 1];
     }
 
@@ -32,9 +36,10 @@ contract X2UniswapExchange is IExchange {
         address tokenIn,
         uint256 amountIn,
         uint256 minAmountOut,
-        address[] calldata path
+        bytes calldata path,
+        uint256 deadline
     ) external override returns (uint256 amountOut) {
-        _validatePath(tokenIn, path);
+        address[] memory decodedPath = _decodePath(tokenIn, path);
 
         // pull tokens in
         require(IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn), "Pull failed");
@@ -44,17 +49,18 @@ contract X2UniswapExchange is IExchange {
         uint256[] memory amounts = IUniV2Router(uniV2Router).swapExactTokensForTokens(
             amountIn,
             minAmountOut,
-            path,
+            decodedPath,
             msg.sender,
-            block.timestamp + 600
+            deadline
         );
         return amounts[amounts.length - 1];
     }
 
-    function _validatePath(address tokenIn, address[] calldata path) internal view {
-        require(path.length >= 2, "Bad path");
-        require(path[0] == tokenIn, "Bad tokenIn");
-        address last = path[path.length - 1];
+    function _decodePath(address tokenIn, bytes calldata path) internal view returns (address[] memory decodedPath) {
+        decodedPath = abi.decode(path, (address[]));
+        require(decodedPath.length >= 2, "Bad path");
+        require(decodedPath[0] == tokenIn, "Bad tokenIn");
+        address last = decodedPath[decodedPath.length - 1];
         if (tokenIn == token0) {
             require(last == token1, "Bad tokenOut");
         } else {

@@ -14,7 +14,6 @@ contract X2Deployer {
     }
 
     address public immutable asset;
-    address public immutable exchange;
     uint256 public immutable feeBps;
     uint256 public immutable positionDuration;
     X2Pool public immutable pool;
@@ -26,17 +25,16 @@ contract X2Deployer {
 
     constructor(
         address asset_,
-        address exchange_,
+        address[] memory exchanges_,
         uint256 feeBps_,
         uint256 positionDuration_,
         address[] memory governors_,
         TargetConfig[] memory targets_
     ) {
         require(asset_ != address(0), "Bad asset");
-        require(exchange_ != address(0), "Bad exchange");
         require(feeBps_ <= 10_000, "Bad fee");
+        require(exchanges_.length > 0, "No exchanges");
         asset = asset_;
-        exchange = exchange_;
         feeBps = feeBps_;
         positionDuration = positionDuration_;
 
@@ -53,7 +51,7 @@ contract X2Deployer {
             X2Swap swap = new X2Swap(
                 asset,
                 targetToken,
-                exchange,
+                exchanges_,
                 priceOracle,
                 feeBps,
                 address(pool),

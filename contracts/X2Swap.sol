@@ -29,7 +29,8 @@ contract X2Swap {
     mapping(uint256 => Position) public positions;
     mapping(address => uint256[]) public positionsOf;
 
-    IExchange public swapRouter;
+    address[] public exchanges;
+    mapping(address => bool) public isExchange;
 
     event OpenPosition(uint256 indexed id, address indexed sender, uint256 assetAmount, uint256 targetAmount, uint256 profitSharing, uint256 feeAmount);
     event ClosePosition(uint256 indexed id, uint256 closeAssetAmount, uint256 feeAmount);
@@ -38,7 +39,7 @@ contract X2Swap {
     constructor(
         address asset_,
         address targetToken_,
-        address swapRouter_,
+        address[] memory exchanges_,
         address priceOracle_,
         uint256 feeBps_,
         address pool_,
@@ -47,13 +48,20 @@ contract X2Swap {
     ) {
         require(pool_ != address(0), "Pool required");
         require(feeGovernance_ != address(0), "Fee governance required");
+        require(exchanges_.length > 0, "No exchanges");
         pool = X2Pool(pool_);
         feeGovernance = FeeGovernance(feeGovernance_);
         asset = IERC20(asset_);
         assetDecimals = IERC20(asset_).decimals();
         targetToken = IERC20(targetToken_);
         targetDecimals = IERC20(targetToken_).decimals();
-        swapRouter = IExchange(swapRouter_);
+        for (uint256 i = 0; i < exchanges_.length; i++) {
+            address ex = exchanges_[i];
+            require(ex != address(0), "Bad exchange");
+            require(!isExchange[ex], "Duplicate exchange");
+            exchanges.push(ex);
+            isExchange[ex] = true;
+        }
         priceOracle = IPriceOracle(priceOracle_);
         feeBps = feeBps_;
         positionDuration = positionDuration_;
@@ -62,10 +70,14 @@ contract X2Swap {
     function openPosition(
         uint256 assetAmount,
         uint256 maxDeviationBps,
-        address[] calldata path
+        address exchangeAddress,
+        bytes calldata path,
+        uint256 deadline
     ) external returns (uint256 id) {
         require(assetAmount > 0, "Zero amount"); // TODO: Another checks???
         require(maxDeviationBps <= ORACLE_MAX_DEVIATION_BPS, "Max deviation too high");
+        require(isExchange[exchangeAddress], "Bad exchange");
+        IExchange exchange = IExchange(exchangeAddress);
         // pull tokens from user, take opening fee
         require(asset.transferFrom(msg.sender, address(this), assetAmount), "Transfer failed");
         uint256 openFee = (assetAmount * feeBps) / 10_000;
@@ -78,16 +90,16 @@ contract X2Swap {
         uint256 totalAmount = netUserAmount * 2;
 
         // Swap combined amount to target token (assumes allowance to router via pool -> swap)
-        uint256 expectedOut = swapRouter.getAmountOut(address(asset), totalAmount, path);
+        uint256 expectedOut = exchange.getAmountOut(address(asset), totalAmount, path);
         require(expectedOut > 0, "No output");
         uint256 oracleMinTargetOut = _oracleMinTargetOut(totalAmount, maxDeviationBps);
         require(expectedOut >= oracleMinTargetOut, "Oracle deviation");
 
-        uint256 currentAllowance = asset.allowance(address(this), address(swapRouter));
+        uint256 currentAllowance = asset.allowance(address(this), exchangeAddress);
         if (currentAllowance < totalAmount) {
-            asset.approve(address(swapRouter), type(uint256).max);
+            asset.approve(exchangeAddress, type(uint256).max);
         }
-        uint256 amountOut = swapRouter.swap(address(asset), totalAmount, expectedOut, path);
+        uint256 amountOut = exchange.swap(address(asset), totalAmount, expectedOut, path, deadline);
         require(amountOut >= expectedOut, "Swap slippage");
 
         uint256 profitSharing = currentProfitSharing();
@@ -111,9 +123,13 @@ contract X2Swap {
     function closePosition(
         uint256 id,
         uint256 maxDeviationBps,
-        address[] calldata path
+        address exchangeAddress,
+        bytes calldata path,
+        uint256 deadline
     ) external {
         require(maxDeviationBps <= ORACLE_MAX_DEVIATION_BPS, "Max deviation too high");
+        require(isExchange[exchangeAddress], "Bad exchange");
+        IExchange exchange = IExchange(exchangeAddress);
         Position memory p = positions[id];
         if (block.timestamp < p.expireDate) {
             require(p.sender == msg.sender, "Not owner");
@@ -123,16 +139,16 @@ contract X2Swap {
 
         // Swap target back to asset
         uint256 amountIn = p.targetAmount;
-        uint256 minOut = swapRouter.getAmountOut(address(targetToken), amountIn, path);
+        uint256 minOut = exchange.getAmountOut(address(targetToken), amountIn, path);
         require(minOut > 0, "No output");
         uint256 oracleMinAssetOut = _oracleMinAssetOut(amountIn, maxDeviationBps);
         require(minOut >= oracleMinAssetOut, "Oracle deviation");
 
-        uint256 currentAllowance = targetToken.allowance(address(this), address(swapRouter));
+        uint256 currentAllowance = targetToken.allowance(address(this), exchangeAddress);
         if (currentAllowance < amountIn) {
-            targetToken.approve(address(swapRouter), type(uint256).max);
+            targetToken.approve(exchangeAddress, type(uint256).max);
         }
-        uint256 assetAmountOut = swapRouter.swap(address(targetToken), amountIn, minOut, path);
+        uint256 assetAmountOut = exchange.swap(address(targetToken), amountIn, minOut, path, deadline);
         (uint256 poolAmount, uint256 borrowerGross) = _splitClose(p.openAssetAmount, assetAmountOut, p.profitSharing);
         uint256 poolPrincipal = p.openAssetAmount / 2;
 
@@ -251,14 +267,15 @@ contract X2Swap {
     /// @return poolAmount amount the pool would receive
     /// @return feeAmount fee charged from borrower side
     /// @return assetAmountOut estimated amount after swapping target back to asset (before borrower fee)
-    function checkPosition(uint256 id, address[] calldata path)
+    function checkPosition(uint256 id, address exchangeAddress, bytes calldata path)
         external
         view
         returns (int256 profit, uint256 borrowerAmount, uint256 poolAmount, uint256 feeAmount, uint256 assetAmountOut)
     {
         Position memory p = positions[id];
         require(p.openDate != 0, "Position not found");
-        assetAmountOut = swapRouter.getAmountOut(address(targetToken), p.targetAmount, path);
+        require(isExchange[exchangeAddress], "Bad exchange");
+        assetAmountOut = IExchange(exchangeAddress).getAmountOut(address(targetToken), p.targetAmount, path);
 
         profit = int256(assetAmountOut) - int256(p.openAssetAmount);
         uint256 borrowerGross;

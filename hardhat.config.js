@@ -12,7 +12,11 @@ module.exports = {
     }
   },
   networks: {
-    hardhat: MAINNET_RPC ? { forking: { url: MAINNET_RPC } } : {},
+    hardhat: MAINNET_RPC ? { forking: { url: MAINNET_RPC }, chainId: 31338 } : {},
+    localhost: {
+      url: "http://127.0.0.1:8545",
+      chainId: 31338
+    },
     x2swap: {
       url: "http://185.146.3.206:8545",
       chainId: 31337

@@ -19,13 +19,15 @@ const swapAbi = [
   "function feeBps() view returns (uint256)",
   "function feesAccrued() view returns (uint256)",
   "function withdrawFees(address to, uint256 amount) returns (uint256)",
-  "function openPosition(uint256 assetAmount, uint256 maxDeviationBps, address[] path) returns (uint256)",
-  "function closePosition(uint256 id, uint256 maxDeviationBps, address[] path)",
+  "function openPosition(uint256 assetAmount, uint256 maxDeviationBps, address exchangeAddress, bytes path, uint256 deadline) returns (uint256)",
+  "function closePosition(uint256 id, uint256 maxDeviationBps, address exchangeAddress, bytes path, uint256 deadline)",
   "function getPositionsOf(address) view returns (uint256[] memory)",
   "function positions(uint256) view returns (uint256,address,uint256,uint256,uint256,uint256,uint256,uint256,uint256)",
-  "function checkPosition(uint256, address[] path) view returns (int256 profit, uint256 borrowerAmount, uint256 poolAmount, uint256 feeAmount, uint256 assetAmountOut)",
+  "function checkPosition(uint256, address exchangeAddress, bytes path) view returns (int256 profit, uint256 borrowerAmount, uint256 poolAmount, uint256 feeAmount, uint256 assetAmountOut)",
   "function targetRate() view returns (uint256)"
 ];
+
+const exchangeAbi = ["function provider() view returns (string)"];
 
 const DEFAULT_MAX_DEVIATION_BPS = 500n;
 
@@ -69,6 +71,8 @@ const state = {
   router: null,
   swap: null,
   swapAddress: null,
+  exchangeAddress: null,
+  exchanges: [],
   asset: null,
   assetDecimals: 6,
   assetAddress: DEFAULT_ASSET,
@@ -88,21 +92,42 @@ const state = {
   feesAccrued: 0n,
   canWithdrawFees: false,
   feeGovernanceAddress: null,
-  feeGovernance: null
+  feeGovernance: null,
+  exchangeLabels: {},
+  uniswapV3Fee: 3000
 };
 
-const getOpenPath = () => {
+const getExchangeLabel = (exchangeAddress) => {
+  if (!exchangeAddress) return "";
+  return state.exchangeLabels[exchangeAddress] || "";
+};
+
+const encodeV3Path = (tokenIn, tokenOut) => {
+  return ethers.solidityPacked(["address", "uint24", "address"], [tokenIn, state.uniswapV3Fee, tokenOut]);
+};
+
+const getOpenPath = (exchangeAddress) => {
   if (!state.assetAddress || !state.targetTokenAddress) {
     throw new Error("Swap path not configured");
   }
-  return [state.assetAddress, state.targetTokenAddress];
+  const label = getExchangeLabel(exchangeAddress);
+  if (label === "UniswapV3") {
+    return encodeV3Path(state.assetAddress, state.targetTokenAddress);
+  }
+  const path = [state.assetAddress, state.targetTokenAddress];
+  return ethers.AbiCoder.defaultAbiCoder().encode(["address[]"], [path]);
 };
 
-const getClosePath = () => {
+const getClosePath = (exchangeAddress) => {
   if (!state.assetAddress || !state.targetTokenAddress) {
     throw new Error("Swap path not configured");
   }
-  return [state.targetTokenAddress, state.assetAddress];
+  const label = getExchangeLabel(exchangeAddress);
+  if (label === "UniswapV3") {
+    return encodeV3Path(state.targetTokenAddress, state.assetAddress);
+  }
+  const path = [state.targetTokenAddress, state.assetAddress];
+  return ethers.AbiCoder.defaultAbiCoder().encode(["address[]"], [path]);
 };
 
 const $ = (id) => document.getElementById(id);
@@ -186,6 +211,54 @@ const setFeesStatus = (msg) => {
 const setWithdrawFeesDisabled = (disabled) => {
   const btn = $("withdrawFeesBtn");
   if (btn) btn.disabled = disabled;
+};
+
+const renderExchangeSelect = () => {
+  const select = $("exchangeSelect");
+  if (!select) return;
+  select.innerHTML = "";
+  if (!state.exchanges.length) {
+    select.disabled = true;
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "No exchanges";
+    select.appendChild(opt);
+    return;
+  }
+  state.exchanges.forEach((addr, idx) => {
+    const opt = document.createElement("option");
+    opt.value = addr;
+    const label = state.exchangeLabels[addr];
+    const base = label && label.trim() ? label : `Exchange ${idx + 1}`;
+    opt.textContent = `${base} (${short(addr)})`;
+    select.appendChild(opt);
+  });
+  select.disabled = false;
+  if (state.exchangeAddress && state.exchanges.includes(state.exchangeAddress)) {
+    select.value = state.exchangeAddress;
+  } else {
+    state.exchangeAddress = state.exchanges[0];
+    select.value = state.exchangeAddress;
+  }
+};
+
+const loadExchangeProviders = async () => {
+  if (!state.provider || !state.exchanges.length) return;
+  const labels = { ...state.exchangeLabels };
+  await Promise.all(
+    state.exchanges.map(async (addr) => {
+      if (labels[addr]) return;
+      try {
+        const ex = new ethers.Contract(addr, exchangeAbi, state.provider);
+        const name = await ex.provider();
+        labels[addr] = name || "";
+      } catch (e) {
+        console.error("Exchange provider fetch failed", addr, e);
+      }
+    })
+  );
+  state.exchangeLabels = labels;
+  renderExchangeSelect();
 };
 const renderPositions = () => {
   const el = $("positionsList");
@@ -302,6 +375,7 @@ async function connect() {
   state.signer = await state.provider.getSigner();
   state.addr = await state.signer.getAddress();
   state.router = new ethers.Contract(UNISWAP_V2_ROUTER, routerAbi, state.signer);
+  await loadExchangeProviders();
   if (state.swapAddress) {
     state.swap = new ethers.Contract(state.swapAddress, swapAbi, state.signer);
     try {
@@ -484,11 +558,12 @@ async function refreshPositions() {
           closeDate: pos[7],
           closeAssetAmount: pos[8]
         };
-        if (position.closeDate === 0n) {
+        if (position.closeDate === 0n && state.exchangeAddress) {
           try {
             const [profit, borrowerAmount, poolAmount, feeAmount, assetAmountOut] = await state.swap.checkPosition(
               id,
-              getClosePath()
+              state.exchangeAddress,
+              getClosePath(state.exchangeAddress)
             );
             position.profit = profit;
             position.borrowerAmount = borrowerAmount;
@@ -759,6 +834,18 @@ async function loadConfig() {
     const res = await fetch("/data/deployment.json", { cache: "no-cache" });
     if (!res.ok) throw new Error("config not found");
     const cfg = await res.json();
+    if (cfg.exchange) {
+      state.exchangeAddress = cfg.exchange;
+    }
+    if (Array.isArray(cfg.exchanges)) {
+      state.exchanges = cfg.exchanges.filter((addr) => ethers.isAddress(addr));
+    }
+    if (!state.exchanges.length && state.exchangeAddress && ethers.isAddress(state.exchangeAddress)) {
+      state.exchanges = [state.exchangeAddress];
+    }
+    if (cfg.uniswapV3Fee && Number.isFinite(Number(cfg.uniswapV3Fee))) {
+      state.uniswapV3Fee = Number(cfg.uniswapV3Fee);
+    }
     if (cfg.x2swap) {
       state.swapAddress = cfg.x2swap;
     } else if (cfg.x2deployer && cfg.targetToken) {
@@ -776,6 +863,7 @@ async function loadConfig() {
       throw new Error("x2swap missing");
     }
     showApp();
+    renderExchangeSelect();
   } catch (err) {
     console.warn("Config load failed:", err.message);
     if (err && err.message === "config not found") {
@@ -788,6 +876,13 @@ async function loadConfig() {
 
 setLoading("Loading config…");
 loadConfig();
+
+if ($("exchangeSelect")) {
+  $("exchangeSelect").onchange = () => {
+    state.exchangeAddress = $("exchangeSelect").value || null;
+    refreshPositions();
+  };
+}
 
 $("depositAmount").oninput = () => {
   updatePoolState();
@@ -945,6 +1040,9 @@ async function openPosition() {
   if (!state.swapAddress) {
     return setPositionStatus("Swap not configured");
   }
+  if (!state.exchangeAddress) {
+    return setPositionStatus("Exchange not configured");
+  }
   const val = $("positionAmount").value;
   if (!val || isNaN(val) || Number(val) <= 0) {
     return setPositionStatus("Enter position amount");
@@ -965,7 +1063,15 @@ async function openPosition() {
   if (!ok) return;
   try {
     setPositionStatus("Opening position...");
-    const tx = await state.swap.openPosition(amount, DEFAULT_MAX_DEVIATION_BPS, getOpenPath(), { gasLimit: 900000n });
+    const deadline = Math.floor(Date.now() / 1000) + 600;
+    const tx = await state.swap.openPosition(
+      amount,
+      DEFAULT_MAX_DEVIATION_BPS,
+      state.exchangeAddress,
+      getOpenPath(state.exchangeAddress),
+      deadline,
+      { gasLimit: 900000n }
+    );
     setPositionStatus("Pending… " + tx.hash);
     await tx.wait();
     setPositionStatus("Position opened");
@@ -991,9 +1097,20 @@ async function handleClosePosition(id) {
   if (!state.swap) {
     return setPositionsStatus("Swap not loaded");
   }
+  if (!state.exchangeAddress) {
+    return setPositionsStatus("Exchange not configured");
+  }
   try {
     setPositionsStatus(`Closing #${id}...`);
-    const tx = await state.swap.closePosition(id, DEFAULT_MAX_DEVIATION_BPS, getClosePath(), { gasLimit: 900000n });
+    const deadline = Math.floor(Date.now() / 1000) + 600;
+    const tx = await state.swap.closePosition(
+      id,
+      DEFAULT_MAX_DEVIATION_BPS,
+      state.exchangeAddress,
+      getClosePath(state.exchangeAddress),
+      deadline,
+      { gasLimit: 900000n }
+    );
     setPositionsStatus("Pending… " + tx.hash);
     await tx.wait();
     setPositionsStatus("Closed");
