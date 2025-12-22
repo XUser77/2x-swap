@@ -19,6 +19,7 @@ const swapAbi = [
   "function feeBps() view returns (uint256)",
   "function feesAccrued() view returns (uint256)",
   "function withdrawFees(address to, uint256 amount) returns (uint256)",
+  "function previewNewPosition(uint256 assetAmount, uint256 maxDeviationBps, address exchangeAddress, bytes path) view returns (uint256 openFee, uint256 netUserAmount, uint256 totalAmount, uint256 expectedOut, uint256 oracleMinTargetOut, uint256 profitSharing)",
   "function openPosition(uint256 assetAmount, uint256 maxDeviationBps, address exchangeAddress, bytes path, uint256 deadline) returns (uint256)",
   "function closePosition(uint256 id, uint256 maxDeviationBps, address exchangeAddress, bytes path, uint256 deadline)",
   "function getPositionsOf(address) view returns (uint256[] memory)",
@@ -794,7 +795,7 @@ async function quotePosition() {
     setPositionRate("–");
     return;
   }
-  if (!state.router || !state.assetAddress || !state.targetTokenAddress) {
+  if (!state.swap || !state.exchangeAddress || !state.assetAddress || !state.targetTokenAddress) {
     setPositionQuote("–");
     $("positionBorrow").textContent = "–";
     setPositionFee("–");
@@ -804,16 +805,20 @@ async function quotePosition() {
   }
   try {
     const amountIn = ethers.parseUnits(val.toString(), state.assetDecimals);
-    const fee = (amountIn * (state.feeBps || 0n)) / 10_000n;
-    const net = amountIn - fee;
-    const totalSwapIn = net * 2n;
-
-    const amounts = await state.router.getAmountsOut(totalSwapIn, [state.assetAddress, state.targetTokenAddress]);
-    const out = amounts[1];
+    const preview = await state.swap.previewNewPosition(
+      amountIn,
+      DEFAULT_MAX_DEVIATION_BPS,
+      state.exchangeAddress,
+      getOpenPath(state.exchangeAddress)
+    );
+    const openFee = preview[0];
+    const net = preview[1];
+    const totalSwapIn = preview[2];
+    const out = preview[3];
     const outFormatted = ethers.formatUnits(out, state.targetDecimals);
     setPositionQuote(outFormatted);
     $("positionBorrow").textContent = ethers.formatUnits(net, state.assetDecimals);
-    setPositionFee(ethers.formatUnits(fee, state.assetDecimals));
+    setPositionFee(ethers.formatUnits(openFee, state.assetDecimals));
     setPositionSwapIn(ethers.formatUnits(totalSwapIn, state.assetDecimals));
     // rate: asset per target
     const totalAssetFormatted = ethers.formatUnits(totalSwapIn, state.assetDecimals);

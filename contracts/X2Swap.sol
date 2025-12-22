@@ -173,6 +173,37 @@ contract X2Swap {
         emit ClosePosition(id, assetAmountOut, borrowerFee);
     }
 
+    /// @notice Preview an openPosition without changing state.
+    function previewNewPosition(
+        uint256 assetAmount,
+        uint256 maxDeviationBps,
+        address exchangeAddress,
+        bytes calldata path
+    )
+        external
+        view
+        returns (
+            uint256 openFee,
+            uint256 netUserAmount,
+            uint256 totalAmount,
+            uint256 expectedOut,
+            uint256 oracleMinTargetOut,
+            uint256 profitSharing
+        )
+    {
+        require(assetAmount > 0, "Zero amount");
+        require(maxDeviationBps <= ORACLE_MAX_DEVIATION_BPS, "Max deviation too high");
+        require(isExchange[exchangeAddress], "Bad exchange");
+
+        openFee = (assetAmount * feeBps) / 10_000;
+        netUserAmount = assetAmount - openFee;
+        totalAmount = netUserAmount * 2;
+
+        expectedOut = IExchange(exchangeAddress).getAmountOut(address(asset), totalAmount, path);
+        oracleMinTargetOut = _oracleMinTargetOut(totalAmount, maxDeviationBps);
+        profitSharing = currentProfitSharing();
+    }
+
     /// @notice Returns pool profit share percentage based on pool utilization U = debt / (assets + debt).
     /// Threshold Model v2:
     /// 0–90%: 20%, 90–92%: 30%, 92–94%: 40%, >94%: 50%
