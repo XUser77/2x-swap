@@ -2,10 +2,14 @@
 pragma solidity ^0.8.20;
 
 import {IExchange} from "./interfaces/IExchange.sol";
-import {IERC20} from "./interfaces/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 /// @notice Minimal Uniswap V2 router adapter implementing IExchange for a fixed token0/token1 pair.
 contract X2UniswapV2Exchange is IExchange {
+
+    using SafeERC20 for IERC20;
+
     address public immutable token0;
     address public immutable token1;
     address public immutable uniV2Router;
@@ -39,12 +43,18 @@ contract X2UniswapV2Exchange is IExchange {
         bytes calldata path,
         uint256 deadline
     ) external override returns (uint256 amountOut) {
+        // Validate deadline
+        require(deadline >= block.timestamp, "Deadline expired");
+        
         address[] memory decodedPath = _decodePath(tokenIn, path);
 
         // pull tokens in
-        require(IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn), "Pull failed");
+        IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
         // approve router if needed
         _ensureApproval(tokenIn, amountIn);
+        
+        // Validate minAmountOut reasonableness
+        require(minAmountOut > 0, "Zero min output");
 
         uint256[] memory amounts = IUniV2Router(uniV2Router).swapExactTokensForTokens(
             amountIn,
@@ -72,7 +82,7 @@ contract X2UniswapV2Exchange is IExchange {
     function _ensureApproval(address token, uint256 amount) internal {
         uint256 current = IERC20(token).allowance(address(this), uniV2Router);
         if (current < amount) {
-            IERC20(token).approve(uniV2Router, type(uint256).max);
+            IERC20(token).approve(uniV2Router, amount); // Exact amount approval
         }
     }
 }

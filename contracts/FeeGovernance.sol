@@ -14,6 +14,9 @@ contract FeeGovernance {
 
     mapping(address => bool) public isWithdrawer;
 
+    bool public isPaused = false;
+    bool public isEmergencyPaused = false; // Permanent pause, cannot be unpaused
+
     uint256 public nextProposalId;
     mapping(uint256 => GovernanceProposal) public proposals;
     mapping(uint256 => mapping(address => bool)) public voted;
@@ -27,12 +30,14 @@ contract FeeGovernance {
 
     constructor(address[] memory governors_) {
         require(governors_.length >= 3, "Min 3 governors");
-        for (uint256 i = 0; i < governors_.length; i++) {
+        uint256 governorsLength = governors_.length;
+        for (uint256 i = 0; i < governorsLength; ) {
             address g = governors_[i];
             require(g != address(0), "Bad governor");
             require(!isGovernor[g], "Duplicate governor");
             governors.push(g);
             isGovernor[g] = true;
+            unchecked { ++i; }
         }
         _recomputeThreshold();
     }
@@ -46,7 +51,7 @@ contract FeeGovernance {
     function proposeAddWithdrawer(address withdrawer) external onlyGovernor returns (uint256 id) {
         require(withdrawer != address(0), "Bad withdrawer");
         require(!isWithdrawer[withdrawer], "Already withdrawer");
-        id = nextProposalId++;
+        id = ++nextProposalId;
         proposals[id] = GovernanceProposal({
             action: GovernanceAction.AddWithdrawer,
             target: withdrawer,
@@ -58,7 +63,7 @@ contract FeeGovernance {
     function proposeRemoveWithdrawer(address withdrawer) external onlyGovernor returns (uint256 id) {
         require(withdrawer != address(0), "Bad withdrawer");
         require(isWithdrawer[withdrawer], "Not withdrawer");
-        id = nextProposalId++;
+        id = ++nextProposalId;
         proposals[id] = GovernanceProposal({
             action: GovernanceAction.RemoveWithdrawer,
             target: withdrawer,
@@ -70,7 +75,7 @@ contract FeeGovernance {
     function proposeAddGovernor(address governor) external onlyGovernor returns (uint256 id) {
         require(governor != address(0), "Bad governor");
         require(!isGovernor[governor], "Already governor");
-        id = nextProposalId++;
+        id = ++nextProposalId;
         proposals[id] = GovernanceProposal({
             action: GovernanceAction.AddGovernor,
             target: governor,
@@ -83,7 +88,7 @@ contract FeeGovernance {
         require(governor != address(0), "Bad governor");
         require(isGovernor[governor], "Not governor");
         require(governors.length > 3, "Min 3 governors");
-        id = nextProposalId++;
+        id = ++nextProposalId;
         proposals[id] = GovernanceProposal({
             action: GovernanceAction.RemoveGovernor,
             target: governor,
@@ -92,9 +97,43 @@ contract FeeGovernance {
         });
     }
 
+    function proposePause() external onlyGovernor returns (uint256 id) {
+        require(!isPaused, "Already paused");
+        id = ++nextProposalId;
+        proposals[id] = GovernanceProposal({
+            action: GovernanceAction.Pause,
+            target: address(0),
+            approvals: 0,
+            executed: false
+        });
+    }
+
+    function proposeUnpause() external onlyGovernor returns (uint256 id) {
+        require(isPaused, "Not paused");
+        require(!isEmergencyPaused, "Emergency pause cannot be reversed");
+        id = ++nextProposalId;
+        proposals[id] = GovernanceProposal({
+            action: GovernanceAction.Unpause,
+            target: address(0),
+            approvals: 0,
+            executed: false
+        });
+    }
+
+    function proposeEmergencyPause() external onlyGovernor returns (uint256 id) {
+        require(!isEmergencyPaused, "Already emergency paused");
+        id = ++nextProposalId;
+        proposals[id] = GovernanceProposal({
+            action: GovernanceAction.EmergencyPause,
+            target: address(0),
+            approvals: 0,
+            executed: false
+        });
+    }
+
     function vote(uint256 id) external onlyGovernor {
         GovernanceProposal storage p = proposals[id];
-        require(p.target != address(0), "No proposal");
+        require(p.target != address(0) || p.action == GovernanceAction.Pause || p.action == GovernanceAction.Unpause || p.action == GovernanceAction.EmergencyPause, "No proposal");
         require(!p.executed, "Executed");
         require(!voted[id][msg.sender], "Already voted");
         voted[id][msg.sender] = true;
@@ -103,11 +142,31 @@ contract FeeGovernance {
 
     function execute(uint256 id) external onlyGovernor {
         GovernanceProposal storage p = proposals[id];
-        require(p.target != address(0), "No proposal");
+        require(p.target != address(0) || p.action == GovernanceAction.Pause || p.action == GovernanceAction.Unpause || p.action == GovernanceAction.EmergencyPause, "No proposal");
         require(!p.executed, "Executed");
         require(p.approvals >= threshold, "Not enough votes");
         p.executed = true;
 
+        // Pause = Temporary pause (users can only close positions and withdraw)
+        if (p.action == GovernanceAction.Pause) {
+            require(!isPaused, "Already paused");
+            require(!isEmergencyPaused, "Already emergency paused");
+            isPaused = true;
+            return;
+        }
+        if (p.action == GovernanceAction.Unpause) {
+            require(isPaused, "Not paused");
+            require(!isEmergencyPaused, "Emergency pause cannot be reversed");
+            isPaused = false;
+            return;
+        }
+        // EmergencyPause = Permanent pause (cannot be unpaused, only close positions allowed)
+        if (p.action == GovernanceAction.EmergencyPause) {
+            require(!isEmergencyPaused, "Already emergency paused");
+            isEmergencyPaused = true;
+            isPaused = true; // Also set isPaused for compatibility
+            return;
+        }
         if (p.action == GovernanceAction.AddWithdrawer) {
             require(!isWithdrawer[p.target], "Already withdrawer");
             isWithdrawer[p.target] = true;
@@ -132,7 +191,7 @@ contract FeeGovernance {
         require(governors.length > 3, "Min 3 governors");
         isGovernor[p.target] = false;
         uint256 len = governors.length;
-        for (uint256 i = 0; i < len; i++) {
+        for (uint256 i = 0; i < len; ) {
             if (governors[i] == p.target) {
                 address last = governors[len - 1];
                 governors[i] = last;
@@ -140,6 +199,7 @@ contract FeeGovernance {
                 _recomputeThreshold();
                 return;
             }
+            unchecked { ++i; }
         }
         revert("Governor not found");
     }

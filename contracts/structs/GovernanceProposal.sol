@@ -5,7 +5,10 @@ enum GovernanceAction {
     AddWithdrawer,
     RemoveWithdrawer,
     AddGovernor,
-    RemoveGovernor
+    RemoveGovernor,
+    Pause,
+    Unpause,
+    EmergencyPause
 }
 
 struct GovernanceProposal {
@@ -14,4 +17,3 @@ struct GovernanceProposal {
     uint256 approvals;
     bool executed;
 }
-

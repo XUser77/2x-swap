@@ -9,16 +9,14 @@ const fs = require("fs");
 const path = require("path");
 const hre = require("hardhat");
 
-async function assertHasCode(provider, address, label) {
-  if (!address) throw new Error(`${label} is empty`);
-  const code = await provider.getCode(address);
-  if (!code || code === "0x") {
-    throw new Error(
-      `${label} has no contract code at ${address}. ` +
-        `You are likely deploying to a non-forked chain. ` +
-        `Set MAINNET_RPC/FORK_URL for forking, or deploy/provide ${label} for your custom testnet.`
-    );
+async function logDeploymentGas(label, contract) {
+  const tx = contract.deploymentTransaction();
+  if (!tx) {
+    console.log(`${label} gas used: n/a`);
+    return;
   }
+  const receipt = await tx.wait();
+  console.log(`${label} gas used: ${receipt.gasUsed.toString()}`);
 }
 
 async function main() {
@@ -43,6 +41,7 @@ async function main() {
   const X2UniswapV2Exchange = await hre.ethers.getContractFactory("X2UniswapV2Exchange");
   const x2uniswapV2 = await X2UniswapV2Exchange.deploy(asset, targetToken, uniswapV2Router);
   await x2uniswapV2.waitForDeployment();
+  await logDeploymentGas("X2UniswapV2Exchange", x2uniswapV2);
 
   const X2UniswapV3Exchange = await hre.ethers.getContractFactory("X2UniswapV3Exchange");
   const x2uniswapV3 = await X2UniswapV3Exchange.deploy(
@@ -53,12 +52,14 @@ async function main() {
     uniswapV3Fee
   );
   await x2uniswapV3.waitForDeployment();
+  await logDeploymentGas("X2UniswapV3Exchange", x2uniswapV3);
 
   let oracleAddr = priceOracle;
   if (!oracleAddr) {
     const FakeOracle = await hre.ethers.getContractFactory("FakeOracle");
     const fakeOracle = await FakeOracle.deploy(uniswapV2Router, asset, targetToken);
     await fakeOracle.waitForDeployment();
+    await logDeploymentGas("FakeOracle", fakeOracle);
     oracleAddr = fakeOracle.target;
     console.log(`FakeOracle deployed to: ${oracleAddr}`);
   } else {
@@ -79,6 +80,7 @@ async function main() {
     [[targetToken, oracleAddr]]
   );
   await x2deployer.waitForDeployment();
+  await logDeploymentGas("X2Deployer", x2deployer);
 
   const x2swap = await x2deployer.swaps(targetToken);
   const pool = await x2deployer.pool();

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+
 import {IExchange} from "./interfaces/IExchange.sol";
-import {IERC20} from "./interfaces/IERC20.sol";
 
 /// @notice Minimal Uniswap V3 router adapter implementing IExchange for a fixed token0/token1 pair.
 contract X2UniswapV3Exchange is IExchange {
@@ -44,10 +45,16 @@ contract X2UniswapV3Exchange is IExchange {
         bytes calldata path,
         uint256 deadline
     ) external override returns (uint256 amountOut) {
+        // Validate deadline
+        require(deadline >= block.timestamp, "Deadline expired");
+        
         _validatePath(tokenIn, path);
 
         require(IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn), "Pull failed");
         _ensureApproval(tokenIn, amountIn);
+        
+        // Validate minAmountOut reasonableness
+        require(minAmountOut > 0, "Zero min output");
 
         IUniV3SwapRouter.ExactInputParams memory params = IUniV3SwapRouter.ExactInputParams({
             path: path,
@@ -84,7 +91,7 @@ contract X2UniswapV3Exchange is IExchange {
     function _ensureApproval(address token, uint256 amount) internal {
         uint256 current = IERC20(token).allowance(address(this), uniV3Router);
         if (current < amount) {
-            IERC20(token).approve(uniV3Router, type(uint256).max);
+            IERC20(token).approve(uniV3Router, amount); // Exact amount approval
         }
     }
 }

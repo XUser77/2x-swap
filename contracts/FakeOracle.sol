@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {IERC20} from "./interfaces/IERC20.sol";
+import {IERC20Extended} from "./interfaces/IERC20Extended.sol";
 import {IPriceOracle} from "./interfaces/IPriceOracle.sol";
 
 interface IUniswapV2RouterLike {
@@ -13,8 +13,8 @@ interface IUniswapV2RouterLike {
 /// @dev Returns price of 1 targetToken denominated in `asset` units (asset decimals).
 contract FakeOracle is IPriceOracle {
     IUniswapV2RouterLike public immutable router;
-    IERC20 public immutable asset;
-    IERC20 public immutable targetToken;
+    IERC20Extended public immutable asset;
+    IERC20Extended public immutable targetToken;
     uint8 public immutable override decimals;
 
     constructor(address router_, address asset_, address targetToken_) {
@@ -22,9 +22,9 @@ contract FakeOracle is IPriceOracle {
         require(asset_ != address(0), "Asset required");
         require(targetToken_ != address(0), "Target required");
         router = IUniswapV2RouterLike(router_);
-        asset = IERC20(asset_);
-        targetToken = IERC20(targetToken_);
-        decimals = IERC20(asset_).decimals();
+        asset = IERC20Extended(asset_);
+        targetToken = IERC20Extended(targetToken_);
+        decimals = asset.decimals();
     }
 
     function latestRoundData()

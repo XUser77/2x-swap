@@ -38,10 +38,11 @@ contract X2Deployer {
         feeBps = feeBps_;
         positionDuration = positionDuration_;
 
-        pool = new X2Pool(asset_, address(this));
         feeGovernance = new FeeGovernance(governors_);
+        pool = new X2Pool(asset_, address(this), address(feeGovernance));
 
-        for (uint256 i = 0; i < targets_.length; i++) {
+        uint256 targetsLength = targets_.length;
+        for (uint256 i = 0; i < targetsLength; ) {
             address targetToken = targets_[i].targetToken;
             address priceOracle = targets_[i].priceOracle;
             require(targetToken != address(0), "Bad target");
@@ -64,6 +65,7 @@ contract X2Deployer {
             allSwaps.push(x2swap);
             pool.registerSwap(x2swap);
             emit SwapCreated(targetToken, x2swap, priceOracle);
+            unchecked { ++i; }
         }
     }
 

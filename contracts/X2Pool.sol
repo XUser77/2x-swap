@@ -1,260 +1,291 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {IERC20} from "./interfaces/IERC20.sol";
-import {IERC4626} from "./interfaces/IERC4626.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+
+import {FeeGovernance} from "./FeeGovernance.sol";
+import {IERC20Extended} from "./interfaces/IERC20Extended.sol";
 
 /// @title X2Pool - ERC-4626 style single contract for deposits and withdrawals
 /// @notice Shares represent a pro-rata claim on pool assets; conversions adjust with gains/losses.
-contract X2Pool is IERC4626 {
-    // ERC20 share metadata
-    string public constant name = "2x Swap Liquidity Provider Token";
-    string public constant symbol = "2xLP";
-    uint8 public constant decimals = 6;
+contract X2Pool is ERC4626, ReentrancyGuard {
 
-    IERC20 public immutable underlying;
+    using SafeERC20 for IERC20;
+
+    FeeGovernance public immutable feeGovernance;
     address public immutable x2deployer;
     mapping(address => bool) public isSwap;
     uint256 public totalDebt;
+    
+    // Protection against first depositor attack (1 token minimum)
+    uint256 public immutable MIN_DEPOSIT;
+    
+    // Protection against pool insolvency (mathematical constants)
+    uint256 public constant MAX_UTILIZATION_BPS = 9500; // 95% maximum utilization
+    
+    // Maximum pool size (10M tokens)
+    uint256 public immutable MAX_POOL_SIZE;
+    
+    // Minimum liquidity for borrow (10 tokens)
+    uint256 public immutable MIN_BORROW_LIQUIDITY;
+    
+    // Events for critical operations
+    event Borrow(
+        address indexed swap,
+        uint256 amount,
+        uint256 newDebt,
+        uint256 totalAssets,
+        uint256 utilizationBps
+    );
+    
+    event ReturnBorrow(
+        address indexed swap,
+        uint256 amountReturned,
+        uint256 debtRepaid,
+        uint256 newDebt,
+        uint256 totalAssets,
+        uint256 utilizationBps
+    );
+    
+    event SwapRegistered(address indexed swap);
+    
+    event PartialWithdraw(
+        address indexed owner,
+        address indexed receiver,
+        uint256 requested,
+        uint256 actual
+    );
+    
+    event PartialRedeem(
+        address indexed owner,
+        address indexed receiver,
+        uint256 requestedShares,
+        uint256 actualShares,
+        uint256 assets
+    );
 
-    uint256 public totalSupply;
-    mapping(address => uint256) public balanceOf;
-    mapping(address => mapping(address => uint256)) public allowance;
+    constructor(address asset_, address x2deployer_, address feeGovernance_)
+        ERC4626(IERC20(asset_)) ERC20("2x Swap Liquidity Provider Token", "2xLP") {
 
-    constructor(address asset_, address x2deployer_) {
         require(asset_ != address(0), "Asset required");
         require(x2deployer_ != address(0), "Deployer required");
-        underlying = IERC20(asset_);
+        require(feeGovernance_ != address(0), "Governance required");
+        
         x2deployer = x2deployer_;
+        feeGovernance = FeeGovernance(feeGovernance_);
+        
+        // Set limits based on token decimals (adaptive to any token)
+        uint8 decimals_ = IERC20Extended(asset_).decimals();
+        uint256 oneToken = 10 ** decimals_;
+        
+        MIN_DEPOSIT = oneToken;                    // 1 token minimum deposit
+        MAX_POOL_SIZE = 10_000_000 * oneToken;     // 10M tokens maximum pool size
+        MIN_BORROW_LIQUIDITY = 10 * oneToken;      // 10 tokens minimum liquidity
     }
 
     /*//////////////////////////////////////////////////////////////
-                            VIEW HELPERS
+                            CORE OVERRIDES
     //////////////////////////////////////////////////////////////*/
 
-    function asset() external view override returns (address) {
-        return address(underlying);
-    }
-
+    /// @notice Override totalAssets to include both free and borrowed funds
+    /// @dev ERC4626 by default uses balanceOf, but we need to track total capital (free + debt)
+    /// @return Total assets under management (balance + debt)
     function totalAssets() public view override returns (uint256) {
-        return underlying.balanceOf(address(this));
-    }
-
-    function convertToShares(uint256 assets) public view override returns (uint256) {
-        return _convertToShares(assets, false);
-    }
-
-    function convertToAssets(uint256 shares) public view override returns (uint256) {
-        return _convertToAssets(shares, false);
-    }
-
-    function previewDeposit(uint256 assets) external view override returns (uint256) {
-        return _convertToShares(assets, false);
-    }
-
-    function previewMint(uint256 shares) external view override returns (uint256) {
-        return _convertToAssets(shares, true);
-    }
-
-    function previewWithdraw(uint256 assets) external view override returns (uint256) {
-        return _convertToShares(assets, true);
-    }
-
-    function previewRedeem(uint256 shares) external view override returns (uint256) {
-        return _convertToAssets(shares, false);
-    }
-
-    function maxDeposit(address) external pure override returns (uint256) {
-        return type(uint256).max;
-    }
-
-    function maxMint(address) external pure override returns (uint256) {
-        return type(uint256).max;
-    }
-
-    function maxWithdraw(address owner) external view override returns (uint256) {
-        return _convertToAssets(balanceOf[owner], false);
-    }
-
-    function maxRedeem(address owner) external view override returns (uint256) {
-        return balanceOf[owner];
-    }
-
-    /*//////////////////////////////////////////////////////////////
-                             ERC20 LOGIC
-    //////////////////////////////////////////////////////////////*/
-
-    function transfer(address to, uint256 value) external override returns (bool) {
-        _transfer(msg.sender, to, value);
-        return true;
-    }
-
-    function approve(address spender, uint256 value) external override returns (bool) {
-        _approve(msg.sender, spender, value);
-        return true;
-    }
-
-    function transferFrom(address from, address to, uint256 value) external override returns (bool) {
-        uint256 currentAllowance = allowance[from][msg.sender];
-        require(currentAllowance >= value, "ERC20: transfer amount exceeds allowance");
-        _transfer(from, to, value);
-        unchecked {
-            _approve(from, msg.sender, currentAllowance - value);
-        }
-        return true;
+        return IERC20(asset()).balanceOf(address(this)) + totalDebt;
     }
 
     /*//////////////////////////////////////////////////////////////
                             POOL ACTIONS
     //////////////////////////////////////////////////////////////*/
 
-    function deposit(uint256 assets, address receiver) public override returns (uint256 shares) {
-        require(assets > 0, "Zero assets");
-        require(receiver != address(0), "Bad receiver");
-        shares = convertToShares(assets);
-        require(underlying.transferFrom(msg.sender, address(this), assets), "Asset transfer failed");
-        _mint(receiver, shares);
-        emit Deposit(msg.sender, receiver, assets, shares);
+    /// @notice Deposit assets with security checks
+    /// @dev Includes MIN_DEPOSIT check and fee-on-transfer detection
+    function deposit(uint256 assets, address receiver) public override nonReentrant returns (uint256 shares) {
+        require(!feeGovernance.isPaused(), "Protocol emergency paused");
+        require(assets >= MIN_DEPOSIT, "Deposit amount too small");
+        
+        // Check maximum pool size
+        uint256 newTotalAssets = totalAssets() + assets;
+        require(newTotalAssets <= MAX_POOL_SIZE, "Pool size limit exceeded");
+
+        uint256 balanceBefore = IERC20(asset()).balanceOf(address(this));
+        shares = super.deposit(assets, receiver);
+        uint256 balanceAfter = IERC20(asset()).balanceOf(address(this));
+        require(balanceAfter - balanceBefore == assets, "Fee detected");
+
+        return shares;
     }
 
-    function mint(uint256 shares, address receiver) external override returns (uint256 assets) {
-        require(shares > 0, "Zero shares");
-        require(receiver != address(0), "Bad receiver");
-        assets = convertToAssets(shares);
-        require(underlying.transferFrom(msg.sender, address(this), assets), "Asset transfer failed");
-        _mint(receiver, shares);
-        emit Deposit(msg.sender, receiver, assets, shares);
+    /// @notice Mint shares with security checks
+    /// @dev Includes MIN_DEPOSIT check and fee-on-transfer detection
+    function mint(uint256 shares, address receiver) public override nonReentrant returns (uint256 assets) {
+        require(!feeGovernance.isPaused(), "Protocol emergency paused");
+        assets = previewMint(shares);
+        require(assets >= MIN_DEPOSIT, "Deposit amount too small");
+        
+        // Check maximum pool size
+        uint256 newTotalAssets = totalAssets() + assets;
+        require(newTotalAssets <= MAX_POOL_SIZE, "Pool size limit exceeded");
+
+        uint256 balanceBefore = IERC20(asset()).balanceOf(address(this));
+        assets = super.mint(shares, receiver);
+        uint256 balanceAfter = IERC20(asset()).balanceOf(address(this));
+        require(balanceAfter - balanceBefore == assets, "Fee detected");
+
+        return assets;
     }
 
-    function withdraw(uint256 assets, address receiver, address owner) public override returns (uint256 shares) {
-        require(assets > 0, "Zero assets");
-        require(receiver != address(0), "Bad receiver");
-        require(owner != address(0), "Bad owner");
-        shares = convertToShares(assets);
-        if (msg.sender != owner) {
-            uint256 currentAllowance = allowance[owner][msg.sender];
-            require(currentAllowance >= shares, "Allowance exceeded");
-            unchecked {
-                _approve(owner, msg.sender, currentAllowance - shares);
-            }
+    /// @notice Withdraw assets with partial fulfillment if insufficient liquidity
+    /// @dev Returns available liquidity if requested amount exceeds free balance
+    function withdraw(uint256 assets, address receiver, address owner) 
+        public 
+        override 
+        nonReentrant 
+        returns (uint256 shares) 
+    {
+        require(assets > 0, "Zero amount");
+        
+        // Get available liquidity (free balance)
+        uint256 available = IERC20(asset()).balanceOf(address(this));
+        
+        // Withdraw what we can (minimum of requested and available)
+        uint256 actualWithdraw = assets > available ? available : assets;
+        
+        // Emit event if partial withdrawal
+        if (actualWithdraw < assets) {
+            emit PartialWithdraw(owner, receiver, assets, actualWithdraw);
         }
-        _burn(owner, shares);
-        require(underlying.transfer(receiver, assets), "Asset transfer failed");
-        emit Withdraw(msg.sender, receiver, owner, assets, shares);
+        
+        // Use standard ERC4626 withdraw for the actual amount
+        return super.withdraw(actualWithdraw, receiver, owner);
     }
 
-    function redeem(uint256 shares, address receiver, address owner) external override returns (uint256 assets) {
+    /// @notice Redeem shares with partial fulfillment if insufficient liquidity
+    /// @dev Returns available liquidity if share value exceeds free balance
+    function redeem(uint256 shares, address receiver, address owner) 
+        public 
+        override 
+        nonReentrant 
+        returns (uint256 assets) 
+    {
         require(shares > 0, "Zero shares");
-        require(receiver != address(0), "Bad receiver");
-        require(owner != address(0), "Bad owner");
-        assets = convertToAssets(shares);
-        if (msg.sender != owner) {
-            uint256 currentAllowance = allowance[owner][msg.sender];
-            require(currentAllowance >= shares, "Allowance exceeded");
-            unchecked {
-                _approve(owner, msg.sender, currentAllowance - shares);
-            }
+        
+        // Calculate how many assets these shares represent
+        uint256 requestedAssets = previewRedeem(shares);
+        
+        // Get available liquidity (free balance)
+        uint256 available = IERC20(asset()).balanceOf(address(this));
+        
+        if (requestedAssets > available) {
+            // Partial redemption: calculate how many shares we can redeem
+            // shares_to_redeem = (available * totalShares) / totalAssets
+            uint256 totalShares = totalSupply();
+            uint256 _totalAssets = totalAssets();
+            uint256 sharesToRedeem = (available * totalShares) / _totalAssets;
+            
+            emit PartialRedeem(owner, receiver, shares, sharesToRedeem, available);
+            
+            // Redeem only what we can
+            return super.redeem(sharesToRedeem, receiver, owner);
         }
-        _burn(owner, shares);
-        require(underlying.transfer(receiver, assets), "Asset transfer failed");
-        emit Withdraw(msg.sender, receiver, owner, assets, shares);
+        
+        // Full redemption possible
+        return super.redeem(shares, receiver, owner);
     }
 
     /*//////////////////////////////////////////////////////////////
                             X2SWAP ACTIONS
     //////////////////////////////////////////////////////////////*/
 
+    /// @notice Register a new swap contract
+    /// @dev Only callable by deployer
     function registerSwap(address swap) external {
         require(msg.sender == x2deployer, "Not deployer");
         require(swap != address(0), "Bad swap");
         isSwap[swap] = true;
+        emit SwapRegistered(swap);
     }
 
-    /// @notice Borrow underlying to the linked X2Swap contract.
-    /// @dev Only callable by the configured X2Swap.
-    function borrow(uint256 amount) external {
+    /// @notice Borrow underlying to the linked X2Swap contract with security checks
+    /// @dev Only callable by the configured X2Swap, includes utilization checks
+    function borrow(uint256 amount) external nonReentrant {
         require(isSwap[msg.sender], "Not swap");
+        require(!feeGovernance.isPaused(), "Protocol emergency paused");
         require(amount > 0, "Zero amount");
+        
+        uint256 _totalAssets = totalAssets();
+        uint256 newDebt = totalDebt + amount;
+        
+        // Check sufficient liquidity
+        require(_totalAssets >= amount, "Insufficient pool liquidity");
+        require(_totalAssets - amount >= MIN_BORROW_LIQUIDITY, "Below min liquidity");
+        
+        // Check maximum utilization
+        uint256 total = _totalAssets + newDebt;
+        uint256 newUtilizationBps = total > 0 ? (newDebt * 10_000) / total : 0;
+        require(newUtilizationBps <= MAX_UTILIZATION_BPS, "Max utilization exceeded");
+        
         totalDebt += amount;
-        require(underlying.transfer(msg.sender, amount), "Transfer failed");
+        
+        // Emit event with full information
+        emit Borrow(msg.sender, amount, totalDebt, _totalAssets, newUtilizationBps);
+        
+        IERC20(asset()).safeTransfer(msg.sender, amount);
     }
 
-    /// @notice Repay borrowed underlying. Caller must transfer tokens and specify how much debt to clear.
-    /// @dev Amount of tokens returned and amount of debt cleared can differ (e.g., accounting for losses).
-    function returnBorrow(uint256 amount, uint256 debtRepaid) external {
+    /// @notice Return borrowed funds to the pool with validation
+    /// @dev Includes parameter consistency checks and utilization tracking
+    /// @dev Allows debtRepaid > amount in loss scenarios (pool absorbs losses)
+    function returnBorrow(uint256 amount, uint256 debtRepaid) external nonReentrant {
         require(isSwap[msg.sender], "Not swap");
         require(debtRepaid <= totalDebt, "Exceeds debt");
+
+        // Transfer tokens if amount > 0
         if (amount > 0) {
-            require(underlying.transferFrom(msg.sender, address(this), amount), "Transfer failed");
+            IERC20(asset()).safeTransferFrom(msg.sender, address(this), amount);
+        } else {
+            // H-11: Cannot clear debt without returning tokens
+            require(debtRepaid == 0, "Cannot clear debt without returning tokens");
         }
+        
         totalDebt -= debtRepaid;
+        
+        // Calculate state for event
+        uint256 _totalAssets = totalAssets();
+        uint256 total = _totalAssets + totalDebt;
+        uint256 utilizationBps = total > 0 ? (totalDebt * 10_000) / total : 0;
+        
+        // Emit event with full information
+        emit ReturnBorrow(msg.sender, amount, debtRepaid, totalDebt, _totalAssets, utilizationBps);
     }
 
     /*//////////////////////////////////////////////////////////////
-                          INTERNAL HELPERS
+                            VIEW HELPERS
     //////////////////////////////////////////////////////////////*/
 
-    function _transfer(address from, address to, uint256 value) internal {
-        require(from != address(0), "Transfer from zero");
-        require(to != address(0), "Transfer to zero");
-        uint256 fromBalance = balanceOf[from];
-        require(fromBalance >= value, "Balance too low");
-        unchecked {
-            balanceOf[from] = fromBalance - value;
-            balanceOf[to] += value;
-        }
-        emit Transfer(from, to, value);
+    /// @notice Get current utilization rate in basis points
+    /// @return Utilization rate (0-10000 = 0%-100%)
+    function currentUtilizationBps() external view returns (uint256) {
+        uint256 _totalAssets = totalAssets();
+        uint256 total = _totalAssets + totalDebt;
+        return total > 0 ? (totalDebt * 10_000) / total : 0;
     }
 
-    function _mint(address to, uint256 value) internal {
-        require(to != address(0), "Mint to zero");
-        totalSupply += value;
-        balanceOf[to] += value;
-        emit Transfer(address(0), to, value);
+    /// @notice Get available liquidity (free balance not currently borrowed)
+    /// @return Available assets for withdrawal or borrowing
+    function availableLiquidity() external view returns (uint256) {
+        return IERC20(asset()).balanceOf(address(this));
     }
 
-    function _burn(address from, uint256 value) internal {
-        require(from != address(0), "Burn from zero");
-        uint256 fromBalance = balanceOf[from];
-        require(fromBalance >= value, "Burn exceeds balance");
-        unchecked {
-            balanceOf[from] = fromBalance - value;
-            totalSupply -= value;
-        }
-        emit Transfer(from, address(0), value);
-    }
-
-    function _approve(address owner_, address spender, uint256 value) internal {
-        require(owner_ != address(0), "Approve from zero");
-        require(spender != address(0), "Approve to zero");
-        allowance[owner_][spender] = value;
-        emit Approval(owner_, spender, value);
-    }
-
-    // Shares reflect pro-rata claim: shares / totalSupply == assets / totalAssets
-    function _convertToShares(uint256 assets, bool roundUp) internal view returns (uint256) { // TODO: Ask about roundUp potential attack!!! (yEarn case)
-        uint256 supply = totalSupply;
-        uint256 backing = totalAssets();
-        if (supply == 0 || backing == 0) {
-            return assets;
-        }
-        uint256 num = assets * supply;
-        if (roundUp && num % backing != 0) {
-            return num / backing + 1;
-        }
-        return num / backing;
-    }
-
-    function _convertToAssets(uint256 shares, bool roundUp) internal view returns (uint256) { // TODO: Ask about roundUp potential attack!!! (yEarn case)
-        uint256 supply = totalSupply;
-        uint256 backing = totalAssets();
-        if (supply == 0 || backing == 0) {
-            return shares;
-        }
-        uint256 num = shares * backing;
-        if (roundUp && num % supply != 0) {
-            return num / supply + 1;
-        }
-        return num / supply;
+    /// @notice Get maximum withdrawable amount for given shares
+    /// @dev Accounts for available liquidity constraints
+    /// @param shares Amount of shares to check
+    /// @return Maximum assets that can be withdrawn
+    function maxWithdrawForShares(uint256 shares) external view returns (uint256) {
+        uint256 requestedAssets = previewRedeem(shares);
+        uint256 available = IERC20(asset()).balanceOf(address(this));
+        return requestedAssets > available ? available : requestedAssets;
     }
 }
