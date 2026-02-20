@@ -283,17 +283,26 @@ contract X2Swap is ReentrancyGuard {
         // Calculate split between pool and borrower (includes profit sharing)
         (uint256 poolAmount, uint256 borrowerGross) = _splitClose(p.openAssetAmount, assetAmountOut, p.profitSharing);
         uint256 poolPrincipal = p.openAssetAmount / 2;
-        
-        // Calculate closing fee from profit only
+
+        // Calculate closing fee proportionally from both pool and user profit
         uint256 closeFee = 0;
+        uint256 poolFee = 0;
+        uint256 borrowerFee = 0;
         if (assetAmountOut >= p.openAssetAmount) {
-            // There is profit - take fee from the profit
-            uint256 profit = assetAmountOut - p.openAssetAmount;
-            closeFee = (profit * feeBps) / 10_000;
+            // There is profit - charge fee on each side's profit portion
+            uint256 poolProfit = poolAmount - poolPrincipal;
+            uint256 borrowerProfit = borrowerGross - (p.openAssetAmount / 2);
+
+            poolFee = (poolProfit * feeBps) / 10_000;
+            borrowerFee = (borrowerProfit * feeBps) / 10_000;
+            closeFee = poolFee + borrowerFee;
             feesAccrued += closeFee;
+
+            // Reduce pool amount by pool's fee share
+            poolAmount -= poolFee;
         }
-        
-        uint256 borrowerNet = borrowerGross > closeFee ? borrowerGross - closeFee : 0;
+
+        uint256 borrowerNet = borrowerGross > borrowerFee ? borrowerGross - borrowerFee : 0;
 
         // H-2: Exact amount approval for pool return
         uint256 poolAllowance = asset.allowance(address(this), address(pool));
