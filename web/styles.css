@@ -25,6 +25,9 @@ body {
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 16px;
 }
+#x2swapBlocks {
+  display: contents;
+}
 .card {
   background: var(--card);
   border: 1px solid var(--border);

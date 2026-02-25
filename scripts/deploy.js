@@ -20,50 +20,57 @@ async function logDeploymentGas(label, contract) {
 }
 
 async function main() {
-  const asset = process.env.ASSET || "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"; // USDC mainnet
-  const targetToken = process.env.TARGET_TOKEN || "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"; // WETH mainnet
-  const uniswapV2Router = process.env.ROUTER || "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"; // Uniswap V2
-  const uniswapV3Router =
-    process.env.UNISWAP_V3_ROUTER || "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"; // SwapRouter02
-  const uniswapV3Quoter =
-    process.env.UNISWAP_V3_QUOTER || "0x61fFE014bA17989E743c5F6cB21bF9697530B21e"; // QuoterV2
-  const uniswapV3Fee = process.env.UNISWAP_V3_FEE ? Number(process.env.UNISWAP_V3_FEE) : 3000;
-  const priceOracle = process.env.PRICE_ORACLE || ""; // optional override
-  const feeBps = process.env.FEE_BPS ? BigInt(process.env.FEE_BPS) : 50n; // default 0.5%
-  const positionDuration = process.env.POSITION_DURATION
-    ? BigInt(process.env.POSITION_DURATION)
-    : 30n * 24n * 60n * 60n; // default 30 days in seconds
+  const asset = "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"; // USDC mainnet
+  const targetTokens = [
+    { symbol: "WETH", address: "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14" },
+    // { symbol: "WBTC", address: "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599" }
+  ];
+  const uniswapV2Router = "0xeE567Fe1712Faf6149d80dA1E6934E354124CfE3"; // Uniswap V2
+  const uniswapV3Router = "0xE592427A0AEce92De3Edee1F18E0157C05861564"; // SwapRouter02
+  const uniswapV3Quoter = "0x5e55c9e631fae526cd4b0526c4818d6e0a9ef0e3"; // QuoterV2
+  const uniswapV3Fee = 3000 // 0.3%;
+  const feeBps = 50n; // 0.5%
+  const positionDuration = 365n * 24n * 60n * 60n; // 365 days
 
   const [deployer, g2, g3] = await hre.ethers.getSigners();
   console.log(`Deploying with ${deployer.address}`);
   console.log(`Asset: ${asset}`);
 
   const X2UniswapV2Exchange = await hre.ethers.getContractFactory("X2UniswapV2Exchange");
-  const x2uniswapV2 = await X2UniswapV2Exchange.deploy(asset, targetToken, uniswapV2Router);
-  await x2uniswapV2.waitForDeployment();
-  await logDeploymentGas("X2UniswapV2Exchange", x2uniswapV2);
-
   const X2UniswapV3Exchange = await hre.ethers.getContractFactory("X2UniswapV3Exchange");
-  const x2uniswapV3 = await X2UniswapV3Exchange.deploy(
-    asset,
-    targetToken,
-    uniswapV3Router,
-    uniswapV3Quoter,
-    uniswapV3Fee
-  );
-  await x2uniswapV3.waitForDeployment();
-  await logDeploymentGas("X2UniswapV3Exchange", x2uniswapV3);
+  const FakeOracle = await hre.ethers.getContractFactory("FakeOracle");
 
-  let oracleAddr = priceOracle;
-  if (!oracleAddr) {
-    const FakeOracle = await hre.ethers.getContractFactory("FakeOracle");
-    const fakeOracle = await FakeOracle.deploy(uniswapV2Router, asset, targetToken);
+  const exchanges = [];
+  const exchangeConfigs = {};
+  const targetConfigs = [];
+
+  for (const target of targetTokens) {
+    const x2uniswapV2 = await X2UniswapV2Exchange.deploy(asset, target.address, uniswapV2Router);
+    await x2uniswapV2.waitForDeployment();
+    await logDeploymentGas(`X2UniswapV2Exchange(${target.symbol})`, x2uniswapV2);
+
+    const x2uniswapV3 = await X2UniswapV3Exchange.deploy(
+      asset,
+      target.address,
+      uniswapV3Router,
+      uniswapV3Quoter,
+      uniswapV3Fee
+    );
+    await x2uniswapV3.waitForDeployment();
+    await logDeploymentGas(`X2UniswapV3Exchange(${target.symbol})`, x2uniswapV3);
+
+    const fakeOracle = await FakeOracle.deploy(uniswapV2Router, asset, target.address);
     await fakeOracle.waitForDeployment();
-    await logDeploymentGas("FakeOracle", fakeOracle);
-    oracleAddr = fakeOracle.target;
-    console.log(`FakeOracle deployed to: ${oracleAddr}`);
-  } else {
-    console.log(`Using PRICE_ORACLE: ${oracleAddr}`);
+    await logDeploymentGas(`FakeOracle(${target.symbol})`, fakeOracle);
+
+    const exchangeSet = [x2uniswapV2.target, x2uniswapV3.target];
+    exchanges.push(...exchangeSet);
+    exchangeConfigs[target.address] = exchangeSet;
+    targetConfigs.push([target.address, fakeOracle.target]);
+
+    console.log(`${target.symbol} X2UniswapV2Exchange deployed to: ${x2uniswapV2.target}`);
+    console.log(`${target.symbol} X2UniswapV3Exchange deployed to: ${x2uniswapV3.target}`);
+    console.log(`${target.symbol} FakeOracle deployed to: ${fakeOracle.target}`);
   }
 
   const governors = process.env.GOVERNORS
@@ -73,22 +80,25 @@ async function main() {
   const X2Deployer = await hre.ethers.getContractFactory("X2Deployer");
   const x2deployer = await X2Deployer.deploy(
     asset,
-    [x2uniswapV2.target, x2uniswapV3.target],
+    exchanges,
     feeBps,
     positionDuration,
     governors,
-    [[targetToken, oracleAddr]]
+    targetConfigs
   );
   await x2deployer.waitForDeployment();
   await logDeploymentGas("X2Deployer", x2deployer);
 
-  const x2swap = await x2deployer.swaps(targetToken);
+  const swapsByTarget = {};
+  for (const target of targetTokens) {
+    swapsByTarget[target.address] = await x2deployer.swaps(target.address);
+  }
   const pool = await x2deployer.pool();
 
-  console.log(`X2UniswapV2Exchange deployed to: ${x2uniswapV2.target}`);
-  console.log(`X2UniswapV3Exchange deployed to: ${x2uniswapV3.target}`);
   console.log(`X2Deployer deployed to: ${x2deployer.target}`);
-  console.log(`X2Swap deployed to: ${x2swap}`);
+  for (const target of targetTokens) {
+    console.log(`${target.symbol} X2Swap deployed to: ${swapsByTarget[target.address]}`);
+  }
   console.log(`X2Pool deployed to: ${pool}`);
 
   // Read asset from the deployed pool to persist source-of-truth
@@ -103,10 +113,12 @@ async function main() {
     rpcUrl,
     chainId,
     x2deployer: x2deployer.target,
-    targetToken,
-    exchange: x2uniswapV2.target,
-    exchanges: [x2uniswapV2.target, x2uniswapV3.target],
-    uniswapV3Fee: uniswapV3Fee
+    targets: targetTokens.map((target) => ({
+      symbol: target.symbol,
+      targetToken: target.address,
+      swap: swapsByTarget[target.address],
+      exchanges: exchangeConfigs[target.address]
+    }))
   };
 
   const dataDir = path.join(__dirname, "..", "web", "data");
