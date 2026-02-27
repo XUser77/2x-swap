@@ -68,6 +68,7 @@ describe("Custom tests", function() {
   }
 
   before(async function () {
+    console.info(encodeV3Path([USDC, WETH], [3000n]));
     this.timeout(240_000);
     if (hre.network.name !== "hardhat") {
       return; // assume an external node (e.g. localhost) is already forked

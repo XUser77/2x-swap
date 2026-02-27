@@ -20,25 +20,25 @@ async function logDeploymentGas(label, contract) {
 }
 
 async function main() {
-  const asset = "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"; // USDC mainnet
+  const asset = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"; // USDC mainnet
   const targetTokens = [
-    { symbol: "WETH", address: "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14" },
-    // { symbol: "WBTC", address: "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599" }
+    { symbol: "WETH", address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" },
+    { symbol: "WBTC", address: "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599" }
   ];
-  const uniswapV2Router = "0xeE567Fe1712Faf6149d80dA1E6934E354124CfE3"; // Uniswap V2
+  const uniswapV2Router = "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"; // Uniswap V2
   const uniswapV3Router = "0xE592427A0AEce92De3Edee1F18E0157C05861564"; // SwapRouter02
   const uniswapV3Quoter = "0x5e55c9e631fae526cd4b0526c4818d6e0a9ef0e3"; // QuoterV2
-  const uniswapV3Fee = 3000 // 0.3%;
-  const feeBps = 50n; // 0.5%
+  const uniswapV3Fee = 3000n // 0.3%;
+  const feeBps = 12n; // 0.12%
   const positionDuration = 365n * 24n * 60n * 60n; // 365 days
 
-  const [deployer, g2, g3] = await hre.ethers.getSigners();
+  const [deployer] = await hre.ethers.getSigners();
   console.log(`Deploying with ${deployer.address}`);
   console.log(`Asset: ${asset}`);
 
   const X2UniswapV2Exchange = await hre.ethers.getContractFactory("X2UniswapV2Exchange");
   const X2UniswapV3Exchange = await hre.ethers.getContractFactory("X2UniswapV3Exchange");
-  const FakeOracle = await hre.ethers.getContractFactory("FakeOracle");
+  // const FakeOracle = await hre.ethers.getContractFactory("FakeOracle");
 
   const exchanges = [];
   const exchangeConfigs = {};
@@ -59,23 +59,31 @@ async function main() {
     await x2uniswapV3.waitForDeployment();
     await logDeploymentGas(`X2UniswapV3Exchange(${target.symbol})`, x2uniswapV3);
 
-    const fakeOracle = await FakeOracle.deploy(uniswapV2Router, asset, target.address);
-    await fakeOracle.waitForDeployment();
-    await logDeploymentGas(`FakeOracle(${target.symbol})`, fakeOracle);
+    // const fakeOracle = await FakeOracle.deploy(uniswapV2Router, asset, target.address);
+    // await fakeOracle.waitForDeployment();
+    // await logDeploymentGas(`FakeOracle(${target.symbol})`, fakeOracle);
 
     const exchangeSet = [x2uniswapV2.target, x2uniswapV3.target];
     exchanges.push(...exchangeSet);
     exchangeConfigs[target.address] = exchangeSet;
-    targetConfigs.push([target.address, fakeOracle.target]);
+    if ("WETH" === target.symbol) {
+      targetConfigs.push([target.address, "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419"]);
+    } else if ("WBTC" === target.symbol) {
+      targetConfigs.push([target.address, "0xF4030086522a5bEEa4988F8cA5B36dbC97BeE88c"]);
+    }
 
     console.log(`${target.symbol} X2UniswapV2Exchange deployed to: ${x2uniswapV2.target}`);
     console.log(`${target.symbol} X2UniswapV3Exchange deployed to: ${x2uniswapV3.target}`);
-    console.log(`${target.symbol} FakeOracle deployed to: ${fakeOracle.target}`);
+    // console.log(`${target.symbol} FakeOracle deployed to: ${fakeOracle.target}`);
   }
 
-  const governors = process.env.GOVERNORS
-    ? process.env.GOVERNORS.split(",").map((s) => s.trim()).filter(Boolean)
-    : [deployer.address, g2.address, g3.address];
+  const governors = [
+    "0xB5EDA84c1D370f590cc295fFCB108B41029F018B", // Deployer address
+    "0xae8028A0BCcF407D609e7497e672CB4bA8b8FEe1",
+    "0x8096aB260890db23BD9fF1f664C1ED9fFb9040f0",
+    "0xd22E92eeD1576ff7640dd258AB57E3463273b1bA",
+    "0x3b3bc2b5e4e46c8373dd0f6aac46c5ded0ddeb1c"
+  ];
 
   const X2Deployer = await hre.ethers.getContractFactory("X2Deployer");
   const x2deployer = await X2Deployer.deploy(

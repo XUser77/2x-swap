@@ -9,7 +9,8 @@
     "test-custom": "hardhat test test/custom.test.js",
     "deploy": "hardhat run scripts/deploy.js --network localhost",
     "deploy-2xswap": "hardhat run scripts/deploy.js --network x2swap",
-    "deploy-testnet": "hardhat run scripts/deploy.js --network testnet"
+    "deploy-testnet": "hardhat run scripts/deploy.js --network testnet",
+    "deploy-mainnet": "hardhat run scripts/deploy.js --network mainnet"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^4.0.0",
