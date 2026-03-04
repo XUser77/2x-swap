@@ -59,7 +59,7 @@ The protocol consists of several interconnected smart contracts:
 
 | Contract | Description | Key Functions |
 |----------|-------------|---------------|
-| **X2Swap.sol** | Main position management contract | `openPosition()`, `closePosition()`, `liquidate()` |
+| **X2Swap.sol** | Main position management contract | `openPosition()`, `closePosition()` |
 | **X2Pool.sol** | ERC-4626 liquidity pool | `deposit()`, `withdraw()`, `borrow()`, `repay()` |
 | **FeeGovernance.sol** | Multi-sig governance for fee management | `proposeFeeChange()`, `approveFeeChange()` |
 | **X2Deployer.sol** | Factory contract for deploying new pairs | `deployPair()` |
@@ -255,8 +255,8 @@ The protocol has undergone a comprehensive security audit. See [SECURITY_AUDIT_R
 
 ### Fee Structure
 
-- **Opening Fee**: None - users pay exactly the collateral amount
-- **Closing Fee**: Charged from borrower's gross share (not just profit)
+- **Opening Fee**: Infrastructure fee (`feeBps`) charged on collateral at position open
+- **Closing Fee**: Charged from profit only (if position is profitable)
 - **Fee Rate**: Configurable via governance (default 1%)
 - **Pool Protection**: Pool's share is never subject to fees
 
@@ -288,13 +288,18 @@ The protocol has undergone a comprehensive security audit. See [SECURITY_AUDIT_R
 
 #### Profit Sharing Model
 
-Profit sharing is dynamic based on pool utilization:
+Profit sharing is dynamic based on pool utilization at position opening:
 
-```
-Utilization < 50%: 20% to pool, 80% to user
-Utilization 50-80%: Linear scaling 20% → 70%
-Utilization > 80%: 70% to pool, 30% to user
-```
+| Pool Utilization | LP Share | Trader Share |
+|------------------|----------|--------------|
+| ≤ 90% | 20% | 80% |
+| 90% – 92% | 30% | 70% |
+| 92% – 94% | 40% | 60% |
+| > 94% | 50% | 50% |
+
+The profit sharing percentage is locked when the position is opened and does not change during the position lifetime. As utilization rises, LPs are compensated with a larger share of profits.
+
+Reference: `X2Swap.sol`, function `currentProfitSharing()`.
 
 #### Oracle Integration
 
