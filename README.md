@@ -15,7 +15,7 @@
 - **Oracle-Based Validation**: Chainlink-style price oracle integration with staleness checks
 - **Emergency Pause System**: Governance-controlled emergency pause mechanism
 - **Multi-Sig Governance**: 3-of-5 multi-signature governance for critical operations
-- **Fee on Close**: Protocol fees charged only when closing positions (from borrower's share)
+- **Protocol Fees**: 0.12% fee on open (from collateral) + 0.12% fee on close (from profit only)
 
 ## 📋 Table of Contents
 
@@ -59,7 +59,7 @@ The protocol consists of several interconnected smart contracts:
 
 | Contract | Description | Key Functions |
 |----------|-------------|---------------|
-| **X2Swap.sol** | Main position management contract | `openPosition()`, `closePosition()`, `liquidate()` |
+| **X2Swap.sol** | Main position management contract | `openPosition()`, `closePosition()` |
 | **X2Pool.sol** | ERC-4626 liquidity pool | `deposit()`, `withdraw()`, `borrow()`, `repay()` |
 | **FeeGovernance.sol** | Multi-sig governance for fee management | `proposeFeeChange()`, `approveFeeChange()` |
 | **X2Deployer.sol** | Factory contract for deploying new pairs | `deployPair()` |
@@ -255,9 +255,9 @@ The protocol has undergone a comprehensive security audit. See [SECURITY_AUDIT_R
 
 ### Fee Structure
 
-- **Opening Fee**: None - users pay exactly the collateral amount
-- **Closing Fee**: Charged from borrower's gross share (not just profit)
-- **Fee Rate**: Configurable via governance (default 1%)
+- **Opening Fee**: 0.12% of collateral amount (`feeBps / 10_000 × collateral`), charged at position open
+- **Closing Fee**: 0.12% of profit only — if the position is not profitable, closing fee is zero
+- **Fee Rate**: Fixed at deployment (immutable) — currently 12 bps (0.12%) on mainnet
 - **Pool Protection**: Pool's share is never subject to fees
 
 ### Known Limitations
@@ -281,20 +281,25 @@ The protocol has undergone a comprehensive security audit. See [SECURITY_AUDIT_R
 
 #### Position Lifecycle
 
-1. **Open Position**: User deposits collateral (no fee), protocol borrows from pool, executes 2x swap
+1. **Open Position**: User deposits collateral (0.12% opening fee deducted), protocol borrows from pool, executes 2x swap
 2. **Active Period**: Position remains open until expiration date
-3. **Close Position**: User closes position before expiration, swap reversed, fee charged from borrower's share
+3. **Close Position**: User closes position before expiration, swap reversed, fee charged from profit only (zero if not profitable)
 4. **Close by Anyone**: After expiration, anyone can close the position
 
 #### Profit Sharing Model
 
-Profit sharing is dynamic based on pool utilization:
+Profit sharing is dynamic based on pool utilization at position opening:
 
-```
-Utilization < 50%: 20% to pool, 80% to user
-Utilization 50-80%: Linear scaling 20% → 70%
-Utilization > 80%: 70% to pool, 30% to user
-```
+| Pool Utilization | LP Share | Trader Share |
+|------------------|----------|--------------|
+| ≤ 90% | 20% | 80% |
+| 90% – 92% | 30% | 70% |
+| 92% – 94% | 40% | 60% |
+| > 94% | 50% | 50% |
+
+The profit sharing percentage is locked when the position is opened and does not change during the position lifetime. As utilization rises, LPs are compensated with a larger share of profits.
+
+Reference: `X2Swap.sol`, function `currentProfitSharing()`.
 
 #### Oracle Integration
 
@@ -327,7 +332,7 @@ Open `http://localhost:8000` in your browser.
 | `MAX_POSITION_SIZE_BPS` | 10000 (100%) | Maximum single position size |
 | `MAX_TOTAL_POSITIONS_BPS` | 9500 (95%) | Maximum total exposure |
 | `MIN_POSITION_INTERVAL` | 60s | Minimum time between positions |
-| `feeBps` | 100 (1%) | Closing fee rate (governance-controlled) |
+| `feeBps` | 12 (0.12%) | Protocol fee rate (immutable, set at deployment) |
 
 ### Hardhat Configuration
 
