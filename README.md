@@ -15,7 +15,7 @@
 - **Oracle-Based Validation**: Chainlink-style price oracle integration with staleness checks
 - **Emergency Pause System**: Governance-controlled emergency pause mechanism
 - **Multi-Sig Governance**: 3-of-5 multi-signature governance for critical operations
-- **Fee on Close**: Protocol fees charged only when closing positions (from borrower's share)
+- **Protocol Fees**: 0.12% fee on open (from collateral) + 0.12% fee on close (from profit only)
 
 ## 📋 Table of Contents
 
@@ -255,9 +255,9 @@ The protocol has undergone a comprehensive security audit. See [SECURITY_AUDIT_R
 
 ### Fee Structure
 
-- **Opening Fee**: Infrastructure fee (`feeBps`) charged on collateral at position open
-- **Closing Fee**: Charged from profit only (if position is profitable)
-- **Fee Rate**: Configurable via governance (default 1%)
+- **Opening Fee**: 0.12% of collateral amount (`feeBps / 10_000 × collateral`), charged at position open
+- **Closing Fee**: 0.12% of profit only — if the position is not profitable, closing fee is zero
+- **Fee Rate**: Fixed at deployment (immutable) — currently 12 bps (0.12%) on mainnet
 - **Pool Protection**: Pool's share is never subject to fees
 
 ### Known Limitations
@@ -281,9 +281,9 @@ The protocol has undergone a comprehensive security audit. See [SECURITY_AUDIT_R
 
 #### Position Lifecycle
 
-1. **Open Position**: User deposits collateral (no fee), protocol borrows from pool, executes 2x swap
+1. **Open Position**: User deposits collateral (0.12% opening fee deducted), protocol borrows from pool, executes 2x swap
 2. **Active Period**: Position remains open until expiration date
-3. **Close Position**: User closes position before expiration, swap reversed, fee charged from borrower's share
+3. **Close Position**: User closes position before expiration, swap reversed, fee charged from profit only (zero if not profitable)
 4. **Close by Anyone**: After expiration, anyone can close the position
 
 #### Profit Sharing Model
@@ -332,7 +332,7 @@ Open `http://localhost:8000` in your browser.
 | `MAX_POSITION_SIZE_BPS` | 10000 (100%) | Maximum single position size |
 | `MAX_TOTAL_POSITIONS_BPS` | 9500 (95%) | Maximum total exposure |
 | `MIN_POSITION_INTERVAL` | 60s | Minimum time between positions |
-| `feeBps` | 100 (1%) | Closing fee rate (governance-controlled) |
+| `feeBps` | 12 (0.12%) | Protocol fee rate (immutable, set at deployment) |
 
 ### Hardhat Configuration
 
